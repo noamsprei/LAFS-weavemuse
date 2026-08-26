@@ -33,26 +33,62 @@ extra_dir = "squashfs-root"
 
 MSCORE = None
 
-if platform.system() == "Linux":
+
+def _looks_like_appimage(path: str) -> bool:
+    """Cheap sanity check that `path` is actually an ELF/AppImage binary and
+    not e.g. a truncated download or an error page/JSON blob served by a
+    flaky host -- real MuseScore AppImages are hundreds of MB; anything
+    under 10MB or missing the ELF magic bytes is not one. Without this
+    check, a bad download (observed in practice: the host returning a small
+    JSON error body instead of the binary) gets exec'd as-is and crashes
+    with an opaque "Exec format error" instead of degrading gracefully.
+    """
+    try:
+        if os.path.getsize(path) < 10 * 1024 * 1024:
+            return False
+        with open(path, "rb") as f:
+            return f.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+if platform.system() == "Linux" and os.environ.get("MUSESCORE_PATH") and os.path.exists(os.environ["MUSESCORE_PATH"]):
+    # Explicit override -- skip the AppImage download entirely.
+    MSCORE = os.environ["MUSESCORE_PATH"]
+    print("Running MuseScore from: ", MSCORE)
+elif platform.system() == "Linux":
     # MuseScore.AppImage only runs on Linux; on other platforms we fall back
     # to a system install below instead of trying to execute it.
-    if not os.path.exists(apkname):
-        download(
-            filename=apkname,
-            url="https://www.modelscope.cn/studio/Genius-Society/piano_trans/resolve/master/MuseScore.AppImage",
+    if not os.path.isdir(extra_dir):
+        if os.path.exists(apkname) and not _looks_like_appimage(apkname):
+            # Stale/corrupt download left behind by a previous run -- remove
+            # it so we don't keep trying to exec garbage.
+            os.remove(apkname)
+        if not os.path.exists(apkname):
+            download(
+                filename=apkname,
+                url="https://www.modelscope.cn/studio/Genius-Society/piano_trans/resolve/master/MuseScore.AppImage",
+            )
+        if _looks_like_appimage(apkname):
+            subprocess.run(["chmod", "+x", f"./{apkname}"])
+            subprocess.run([f"./{apkname}", "--appimage-extract"])
+
+    if os.path.isdir(extra_dir):
+        file_dir = os.path.dirname(os.path.abspath(__file__))
+        # only keep the part of the file_dir that is before the "/weavemuse/models/notagen/..."
+        file_dir = file_dir[:file_dir.find("/weavemuse/models/")]
+        MSCORE = os.path.join(file_dir, extra_dir, "AppRun")
+        print("Running MuseScore from: ", MSCORE)
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    else:
+        print(
+            "⚠️  MuseScore.AppImage is unavailable (download failed or "
+            "looked invalid -- the hosting service may be temporarily down). "
+            "XML→PDF/MIDI/MP3 conversion will be skipped -- ABC and XML "
+            "output still work. Install MuseScore yourself and set "
+            "MUSESCORE_PATH to its executable to enable full conversion, or "
+            "retry later."
         )
-
-    if not os.path.exists(extra_dir):
-        subprocess.run(["chmod", "+x", f"./{apkname}"])
-        subprocess.run([f"./{apkname}", "--appimage-extract"])
-
-    file_dir = os.path.dirname(os.path.abspath(__file__))
-    # only keep the part of the file_dir that is before the "/weavemuse/models/notagen/..."
-    file_dir = file_dir[:file_dir.find("/weavemuse/models/")]
-    MSCORE = os.path.join(file_dir, extra_dir, "AppRun")
-
-    print("Running MuseScore from: ", MSCORE)
-    os.environ["QT_QPA_PLATFORM"] = "offscreen"
 else:
     # Non-Linux (Windows/macOS): look for a MuseScore executable already on
     # this machine instead of the Linux-only AppImage. Set MUSESCORE_PATH to
