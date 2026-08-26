@@ -218,3 +218,6 @@ weights_*.pth
 
 /tests
 /docs/
+
+# scripts/quickstart_remote.py generated output (ABC/MIDI/audio + transcripts)
+/outputs/

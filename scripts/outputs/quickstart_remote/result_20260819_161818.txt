@@ -1,0 +1,13 @@
+Here's a short, cheerful piano piece in ABC notation:
+
+X:1
+T:Cheerful Piano Piece
+M:C
+K:C
+L:1/8
+Q:1/4=120
+V:1 clef=treble
+"cheerful" E G B D | F# A C E | G B D F# | A C E G |
+"joyful" B D F# A | C E G B | D F# A C | E G B D |
+"bright" F# A C E | G B D F# | A C E G | B D F# A |
+"happy" C E G B | D F# A C | E G B D | F# A C E |

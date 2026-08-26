@@ -67,8 +67,13 @@ class WeaveMuseGUI:
 
             model = InferenceClientModel(
                 model_id="Qwen/Qwen3-Coder-30B-A3B-Instruct", # Using Qwen3 for better coding capabilities
-                provider="nebius", # Using Nebius for better rates and reliability, feel free to change                
-                ) 
+                # NOTE: as of writing, HF's inferenceProviderMapping for this model
+                # only lists featherless-ai/scaleway as live -- nebius 404s ("Model
+                # ... is not supported by provider nebius"). Re-check at
+                # https://huggingface.co/api/models/{model}?expand[]=inferenceProviderMapping
+                # if this starts failing again.
+                provider="featherless-ai",
+                )
             if model_choice == '3':
                 tool_mode = "remote"
             else:

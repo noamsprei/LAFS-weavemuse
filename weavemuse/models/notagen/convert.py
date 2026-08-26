@@ -27,6 +27,13 @@ def abc2xml(filename_base):
 
 def xml2(filename_base, target_fmt):
 
+    if not MSCORE:
+        raise RuntimeError(
+            "MuseScore is not available on this system, so XML cannot be "
+            f"converted to {target_fmt}. Install MuseScore and set the "
+            "MUSESCORE_PATH environment variable to its executable."
+        )
+
     xml_file = filename_base + '.xml'
     if not "." in target_fmt:
         target_fmt = "." + target_fmt
