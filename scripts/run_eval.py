@@ -19,10 +19,15 @@ Backbone LLM runs LOCALLY (same VRAM-tier auto-selection as
 scripts/quickstart_local.py) -- by design, per this study's premise that a
 weaker local model shows more visible prompt-sensitivity than a strong cloud
 model would. --tool-mode defaults to "remote" (not "hybrid") specifically to
-free all VRAM for that backbone: local music tools aren't needed for
-trace-quality research and would only compound the per-task VRAM growth
-that's already a real constraint on an 8GB card (see gpu_guard.py's
-docstring).
+avoid the LARGE local music models (StableAudio ~5GB, ChatMusician ~4-8GB) so
+they don't compound the per-task VRAM growth that's already a real
+constraint on an 8GB card (see gpu_guard.py's docstring). Note this isn't
+literally zero local GPU use even in --tool-mode remote: RemoteNotaGenTool
+still loads a small (~516M param) local NotaGen model despite its name --
+confirmed in practice, this cost real VRAM headroom (down to ~1.2GB free
+after a single task on this 8GB card) and contributed to an observed CUDA
+OOM during development (now caught and recorded as state="error" rather than
+crashing the sweep -- see runner.py::run_one()).
 """
 
 from __future__ import annotations
@@ -62,9 +67,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", required=True,
                          help="Name for this sweep's output subdirectory, e.g. smoke_test.")
     parser.add_argument("--tool-mode", choices=["remote", "hybrid"], default="remote",
-                         help="'remote' (default, recommended): zero local-GPU tools, all VRAM "
-                              "for the backbone. 'hybrid': also load local music tools -- only "
-                              "if your dataset specifically needs them; compounds VRAM pressure.")
+                         help="'remote' (default, recommended): avoids the large local music "
+                              "models (StableAudio, ChatMusician); RemoteNotaGenTool still loads "
+                              "a small local model despite its name (~1GB observed). 'hybrid': "
+                              "also load the large local music tools -- only if your dataset "
+                              "specifically needs them; compounds VRAM pressure further.")
     parser.add_argument("--max-steps", type=int, default=5)
     parser.add_argument("--max-new-tokens", type=int, default=1536)
     parser.add_argument("--task-ids", default=None,

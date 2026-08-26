@@ -97,20 +97,28 @@ outputs/eval/<run_id>/
 
 ## What to pay attention to
 
-- **VRAM is genuinely tight on an 8GB card.** `smolagents`' `CodeAgent`
-  resends the *entire* growing conversation every step (no cross-step
-  KV-cache reuse) — this was observed to grow input tokens from 2,725 (step
-  1) to 19,721 (step 5) within a single task, pushing VRAM from ~5.5GB to
-  ~7.7GB/8.2GB. `run_eval.py` mitigates this by defaulting `--tool-mode
-  remote` (frees all VRAM for the backbone; local music tools aren't needed
-  for trace research and would compound the pressure) and calling
-  `release_gpu_memory()` after every `(task, variant)` pair — but a single
-  long/looping task can still get close to the ceiling. Watch
-  `manifest.json`'s `free_vram_gb_after` per run if you see slowdowns or
-  OOMs; `weavemuse/eval/gpu_guard.py::check_vram_headroom()` will refuse to
-  start a sweep if there isn't enough free VRAM to begin with (and will name
-  the PID holding it, if any — a stale/suspended process holding VRAM
-  indefinitely was the root cause of one such incident during development).
+- **VRAM is genuinely tight on an 8GB card, and OOM is a real, observed
+  outcome, not just a theoretical risk.** `smolagents`' `CodeAgent` resends
+  the *entire* growing conversation every step (no cross-step KV-cache
+  reuse) — this was observed to grow input tokens from 2,725 (step 1) to
+  19,721 (step 5) within a single task. `run_eval.py` mitigates this by
+  defaulting `--tool-mode remote` (avoids the *large* local music models —
+  StableAudio ~5GB, ChatMusician ~4-8GB) and calling `release_gpu_memory()`
+  after every `(task, variant)` pair — verified in practice: free VRAM
+  returned to the identical value after every pair in a 6-pair sweep, so
+  there's no *run-over-run* creep. But **`RemoteNotaGenTool` still loads a
+  small local model despite its name** (confirmed: ~1GB), and *within* a
+  single task, a CUDA OOM did occur during development on this exact 8GB
+  card. `run_one()` now catches this (any exception from `agent.run()`) and
+  records `state="error"` with the exception text in the trace JSON instead
+  of crashing the whole sweep — so a single bad pair costs you that one
+  result, not the rest of the dataset. Watch `manifest.json`'s
+  `free_vram_gb_after` and `error` fields per run if you see this happening
+  often; `weavemuse/eval/gpu_guard.py::check_vram_headroom()` still refuses
+  to *start* a sweep if there isn't enough free VRAM up front (and names the
+  PID holding it, if any — a stale/suspended process holding VRAM
+  indefinitely was the root cause of one such pre-sweep incident during
+  development, distinct from the within-task OOM above).
 - **A leftover process can silently eat your VRAM.** If a prior
   `quickstart_local.py`/`run_eval.py` run opened a blocking window or is
   still alive in another terminal, it keeps its model loaded in VRAM. Check
