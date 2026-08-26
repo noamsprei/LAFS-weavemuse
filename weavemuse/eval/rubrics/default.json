@@ -1,0 +1,22 @@
+{
+  "version": "v1",
+  "criteria": {
+    "tool_selection_correctness": {
+      "description": "Did the agent choose the right tool(s) for the task (e.g. symbolic_music_agent for ABC notation, not a hallucinated or wrong tool), with correctly-formed arguments?",
+      "scale": "0 (never called a valid tool / consistently wrong choice) to 5 (always the right tool, correctly invoked)"
+    },
+    "reasoning_coherence": {
+      "description": "Are the 'Thought:' steps coherent, non-repetitive, and do they build on prior steps rather than restating them?",
+      "scale": "0 (incoherent or looping/repeating itself) to 5 (clear, concise, progresses logically)"
+    },
+    "task_success": {
+      "description": "Did the final answer actually satisfy the task query?",
+      "scale": "0 (no relevant answer / failed) to 5 (fully satisfies the request)"
+    },
+    "efficiency": {
+      "description": "Did the agent reach a final answer in a reasonable number of steps/tokens, without unnecessary repetition or wasted tool calls? Judge this alongside the objective step_count/total_tokens numbers already in the trace, not from the text alone.",
+      "scale": "0 (hit max_steps without finishing, or wildly wasteful) to 5 (direct, minimal steps to a correct answer)"
+    }
+  },
+  "notes": "This is a starting rubric for the trace-quality study, not a fixed spec -- edit criteria/scale wording freely per weavemuse/eval/README.md. score_trace_file()'s contract (rubric in, {criterion: {score, rationale}} out) is what's load-bearing."
+}
