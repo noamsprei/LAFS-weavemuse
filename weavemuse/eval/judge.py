@@ -40,7 +40,14 @@ class LocalJudgeBackend:
     def score(self, prompt: str) -> str:
         from smolagents import ChatMessage, MessageRole
 
-        message = self._model.generate([ChatMessage(role=MessageRole.USER, content=prompt)])
+        # smolagents' get_clean_message_list() expects structured content
+        # blocks ([{"type": "text", "text": ...}]), not a bare string -- a
+        # plain str here fails with "TypeError: string indices must be
+        # integers" deep inside TransformersModel.generate().
+        chat_message = ChatMessage(
+            role=MessageRole.USER, content=[{"type": "text", "text": prompt}]
+        )
+        message = self._model.generate([chat_message])
         return message.content or ""
 
 

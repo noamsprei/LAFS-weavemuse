@@ -94,12 +94,26 @@ def build_manager_agent(model, variant: PromptVariant, cfg: RunConfig) -> CodeAg
 def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> dict:
     """Run one (task, variant) pair and write its trace JSON. Returns the
     same record dict that gets written to disk, for manifest bookkeeping.
+
+    Any exception from agent.run() (observed in practice: a CUDA OOM inside a
+    nested sub-agent's own generate() call, which smolagents does NOT always
+    absorb internally -- it can propagate all the way out of .run()) is
+    caught here rather than left to crash the whole sweep. One bad
+    (task, variant) pair records state="error" and the sweep moves on,
+    instead of silently losing every pair after it and never writing
+    manifest.json.
     """
     free_vram_before = get_free_vram_gb()
 
-    agent = build_manager_agent(model, variant, cfg)
+    agent = None
+    result = None
+    error_text = None
     try:
+        agent = build_manager_agent(model, variant, cfg)
         result = agent.run(task.query, reset=True)
+    except Exception as e:
+        error_text = f"{type(e).__name__}: {e}"
+        print(f"    ⚠️  run failed: {error_text}")
     finally:
         # Drop references before release_gpu_memory() so gc can actually
         # collect the sub-agents'/tools' tensors before empty_cache() runs.
@@ -107,6 +121,15 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
         release_gpu_memory()
 
     free_vram_after = get_free_vram_gb()
+
+    if result is not None:
+        output = result.output
+        state = result.state
+        token_usage = result.token_usage.dict() if result.token_usage else None
+        timing = result.timing.dict()
+        messages = result.messages
+    else:
+        output, state, token_usage, timing, messages = None, "error", None, None, []
 
     record = {
         "task_id": task.task_id,
@@ -119,11 +142,12 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
             "max_new_tokens": cfg.max_new_tokens,
             "model_id": cfg.model_id,
         },
-        "output": result.output,
-        "state": result.state,
-        "token_usage": result.token_usage.dict() if result.token_usage else None,
-        "timing": result.timing.dict(),
-        "messages": result.messages,
+        "output": output,
+        "state": state,
+        "error": error_text,
+        "token_usage": token_usage,
+        "timing": timing,
+        "messages": messages,
         "free_vram_gb_before": free_vram_before,
         "free_vram_gb_after": free_vram_after,
         "timestamp": datetime.datetime.now().isoformat(),
@@ -188,7 +212,8 @@ def run_sweep(model, cfg: RunConfig) -> None:
                 "variant_id": variant.variant_id,
                 "state": record["state"],
                 "total_tokens": (record["token_usage"] or {}).get("total_tokens"),
-                "duration": record["timing"].get("duration"),
+                "duration": (record["timing"] or {}).get("duration"),
+                "error": record["error"],
                 "free_vram_gb_after": record["free_vram_gb_after"],
                 "trace_path": str(cfg.trace_path(task.task_id, variant.variant_id)),
             })
