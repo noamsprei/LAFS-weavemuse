@@ -1,0 +1,3 @@
+{"task_id": "t001", "query": "Compose a short, cheerful 8-bar piano piece in ABC notation.", "category": "symbolic_generation", "tags": ["notagen"], "metadata": {}}
+{"task_id": "t002", "query": "What's the capital of France?", "category": "off_domain", "tags": ["refusal_check"], "metadata": {}}
+{"task_id": "t003", "query": "Explain the difference between a major and a minor triad in music theory.", "category": "music_theory_qa", "tags": ["no_tool_expected"], "metadata": {}}
