@@ -221,3 +221,12 @@ weights_*.pth
 
 # scripts/quickstart_remote.py generated output (ABC/MIDI/audio + transcripts)
 /outputs/
+# Confidential research data (Didone dataset + derived analyses) — never commit
+didone_midi/
+harmony_analysis/
+text_tonal_alignment/
+textual_plan/
+metadata.csv
+
+# IDE
+.idea/csv-editor.xml
