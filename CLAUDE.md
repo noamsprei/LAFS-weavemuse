@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## How to respond
+
+Answer one step at a time. Do one thing, show the result, stop, and wait. Do not
+chain multiple steps or pre-empt the next question. Be concise: no preamble, no
+recap, no unsolicited alternatives or "you could also" lists. If a question is
+simple, answer it in a sentence or two. Expand only when asked.
+
 ## What this is
 
 WeaveMuse is a multi-agent music AI framework built on `smolagents` (Hugging Face's agent
