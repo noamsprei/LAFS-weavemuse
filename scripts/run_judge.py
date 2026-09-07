@@ -70,7 +70,14 @@ def main() -> None:
     with args.rubric.open("r", encoding="utf-8") as f:
         rubric = json.load(f)
 
-    trace_paths = sorted(args.traces_dir.rglob("*.json"))
+    # Excludes manifest.json by name: rglob("*.json") also matches it when
+    # --traces-dir is pointed at a run's root dir instead of its traces/
+    # subdirectory (an easy mistake -- manifest.json sits right next to
+    # traces/), and manifest.json has no "task_id"/"query" keys, so handing
+    # it to score_trace_file() crashes with a bare KeyError.
+    trace_paths = sorted(
+        p for p in args.traces_dir.rglob("*.json") if p.name != "manifest.json"
+    )
     if args.limit is not None:
         trace_paths = trace_paths[: args.limit]
     if not trace_paths:
@@ -119,10 +126,18 @@ def main() -> None:
 
     for i, trace_path in enumerate(trace_paths, start=1):
         print(f"[{i}/{len(trace_paths)}] scoring {trace_path} ...")
-        record = score_trace_file(
-            trace_path, backend, rubric,
-            judge_backend_name=args.backend, judge_model_id=judge_model_id,
-        )
+        try:
+            record = score_trace_file(
+                trace_path, backend, rubric,
+                judge_backend_name=args.backend, judge_model_id=judge_model_id,
+            )
+        except (KeyError, json.JSONDecodeError) as e:
+            # A file under --traces-dir that isn't a trace JSON (or is one
+            # missing required fields) shouldn't crash the whole batch --
+            # skip it and keep going, matching run_eval.py's own per-pair
+            # error isolation philosophy.
+            print(f"    ⚠️  skipping {trace_path}: not a valid trace file ({type(e).__name__}: {e})")
+            continue
         out_path = output_dir / record["task_id"] / f"{record['variant_id']}.judge.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("w", encoding="utf-8") as f:

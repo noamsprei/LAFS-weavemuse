@@ -59,14 +59,62 @@ outputs/eval/<run_id>/
 ```
 `outputs/` is gitignored — these are run artifacts, not checked in.
 
+Each trace also carries two fields beyond the manager's own flattened
+`messages`, from `weavemuse/eval/tool_tracing.py` (always on, no flag
+needed):
+- **`tool_calls`** — an ordered ledger of every individual tool call *and*
+  every manager→sub-agent call (name, args, action `called`/`error`,
+  truncated output, timing) — this is the only place to see e.g. the exact
+  `audio_flamingo` invocation; the manager's own `messages` field only ever
+  records a single synthetic `python_interpreter` step per turn (the whole
+  generated code blob), never the individual calls inside it.
+- **`sub_agent_traces`** — each managed sub-agent's own
+  `memory.get_full_steps()` (e.g. `audio_analysis_agent`'s own
+  Thought/Code/Observation cycle, including which tool it tried first and
+  what it fell back to) — previously invisible; only the sub-agent's bare
+  final-answer text ever reached the manager's trace before this. **Caveat**:
+  if a sub-agent is invoked more than once within one task, only its *last*
+  invocation's steps survive here (smolagents resets a sub-agent's memory
+  on each call) — acceptable given these sub-agents cap at `max_steps=1` or
+  `2` and are typically invoked once per task.
+
 ## What to modify for your actual study
 
 - **`data/eval/tasks_smoke.jsonl`** → write your own dataset here (or point
   `--dataset` at a new file). One JSON object per line:
   ```json
-  {"task_id": "t004", "query": "...", "category": "...", "tags": [], "metadata": {}}
+  {"task_id": "t004", "query": "...", "category": "...", "tags": [], "metadata": {}, "attachments": {}}
   ```
   `task_id` must be unique within the file (the loader raises on duplicates).
+
+  **`attachments`** (optional) is how to give a task local files (audio,
+  MIDI, images, ...) that the agent should actually use, e.g.
+  `{"audio_file": "audio/foo.wav"}` -- paths are resolved relative to the
+  dataset file's own directory and validated to exist at load time
+  (`load_tasks()` raises a clear error naming the task/key/path otherwise).
+  `run_one()` passes `attachments` to `agent.run(additional_args=...)`, so
+  each key becomes both literal text in the task prompt and a real Python
+  variable the manager's generated code can reference.
+
+  **Name each key after the actual tool parameter it will end up at**, e.g.
+  `audio_file` (matching `AudioFlamingoTool.forward(audio_file=...)` /
+  `AudioAnalysisTool.forward(audio_file=...)`), not a generic name like
+  `audio`. This was confirmed the hard way: `additional_args` values keep
+  their dict key as the variable name at every hop (manager's own scope →
+  the sub-agent's own scope via its own `additional_args={...}` call →
+  whatever keyword the LLM then uses on the actual tool call) -- an LLM
+  asked to "forward the exact path" will frequently forward it under its
+  existing variable name rather than renaming it to the tool's real
+  parameter, producing a `TypeError: ...forward() got an unexpected keyword
+  argument 'audio'` a couple of steps in. Naming the attachment key after
+  the tool's parameter from the start makes every hop a same-name passthrough
+  and sidesteps this failure mode entirely, rather than relying on prompt
+  wording to get an LLM to rename a variable correctly.
+
+  **Never put an answer/reference field (e.g. `ground_truth`) in
+  `attachments`** -- anything there reaches the model. Keep those in
+  `metadata` instead, which stays agent-invisible bookkeeping (used only by
+  you / a future judge extension, never passed to `agent.run()`).
 
 - **`data/eval/variants_smoke.json`** → this is where your "default vs.
   modified prompt" comparison actually lives. Every variant file MUST define

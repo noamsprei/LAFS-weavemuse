@@ -24,6 +24,7 @@ from smolagents import CodeAgent
 from weavemuse.agents.agents_as_tools import get_weavemuse_agents_and_tools
 from weavemuse.eval.dataset import EvalTask, load_tasks
 from weavemuse.eval.gpu_guard import get_free_vram_gb, release_gpu_memory
+from weavemuse.eval.tool_tracing import collect_sub_agent_traces, traced_run
 from weavemuse.eval.variants import PromptVariant, load_variants
 
 # Short, static tool-facing description -- NOT what varies across the study.
@@ -108,13 +109,31 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
     agent = None
     result = None
     error_text = None
+    ledger = None
     try:
         agent = build_manager_agent(model, variant, cfg)
-        result = agent.run(task.query, reset=True)
+        # attachments (e.g. {"audio_file": "/abs/path.wav"}) ride in via
+        # smolagents' own additional_args mechanism: merged into the
+        # manager's Python-executor state (so its generated code can
+        # reference `audio_file` as a real variable) AND appended to the
+        # task text -- NOT task.metadata, which may hold eval-only fields
+        # like ground_truth that must never reach the model.
+        #
+        # traced_run() captures every individual tool/sub-agent call (not
+        # just the manager's own flattened step text) for the trace record
+        # below -- see tool_tracing.py's module docstring. `ledger` is bound
+        # as soon as the `with` block starts, before agent.run() runs, so it
+        # still holds every call recorded even if agent.run() itself raises.
+        with traced_run(agent) as ledger:
+            result = agent.run(
+                task.query, reset=True, additional_args=task.attachments or None
+            )
     except Exception as e:
         error_text = f"{type(e).__name__}: {e}"
         print(f"    ⚠️  run failed: {error_text}")
     finally:
+        tool_calls = ledger.as_list() if ledger is not None else []
+        sub_agent_traces = collect_sub_agent_traces(agent) if agent is not None else {}
         # Drop references before release_gpu_memory() so gc can actually
         # collect the sub-agents'/tools' tensors before empty_cache() runs.
         del agent
@@ -136,6 +155,7 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
         "variant_id": variant.variant_id,
         "variant_instructions": variant.instructions,
         "query": task.query,
+        "attachments": task.attachments,
         "run_config": {
             "tool_mode": cfg.tool_mode,
             "max_steps": cfg.max_steps,
@@ -148,6 +168,8 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
         "token_usage": token_usage,
         "timing": timing,
         "messages": messages,
+        "tool_calls": tool_calls,
+        "sub_agent_traces": sub_agent_traces,
         "free_vram_gb_before": free_vram_before,
         "free_vram_gb_after": free_vram_after,
         "timestamp": datetime.datetime.now().isoformat(),
