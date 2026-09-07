@@ -46,6 +46,10 @@ _FILES = {
     "textual_plan_sections": "textual_plan/textual_plan_sections.csv",
 }
 
+# One row per record_id expected; a few duplicate ids exist in the source
+# (near-identical file variants) and are collapsed to the first on load.
+_SINGLE_ROW = {"metadata", "tonal_plan_overview", "textual_plan_overview"}
+
 # harmony_events is ~190MB; only these columns are needed by get_harmony.
 _HARMONY_COLS = [
     "record_id", "measure_number", "beat", "normalized_label", "local_function",
@@ -74,6 +78,8 @@ def _load(name: str) -> pd.DataFrame:
         kwargs["usecols"] = [c for c in _HARMONY_COLS]
     df = pd.read_csv(path, **kwargs)
     df["record_id"] = df["record_id"].astype(str).str.strip()
+    if name in _SINGLE_ROW:
+        df = df.drop_duplicates(subset="record_id", keep="first").reset_index(drop=True)
     return df
 
 
@@ -294,8 +300,96 @@ class DidoneTextStructureTool(Tool):
         return f"{head}\n\nsections:\n{_fmt_table(sec.sort_values('section_index'), cols)}"
 
 
+_MAX_BATCH = 80
+
+
+def _parse_ids(record_ids: str) -> list[str]:
+    return [x.strip() for x in str(record_ids).replace(",", " ").split() if x.strip()]
+
+
+class DidoneTonalPlansBatchTool(Tool):
+    name = "get_tonal_plans"
+    description = (
+        "Get the tonal-plan string and opening key for MANY arias at once, given "
+        "a list of record_ids. Use this after search_didone_corpus to compare an "
+        "aria against a sample of its peers (same decade, same composer, same "
+        "text) without one call per aria. Returns CSV: record_id, composer, year, "
+        "initial_key, tonal_plan. Max 80 ids."
+    )
+    inputs = {"record_ids": {"type": "string", "description": "record_ids separated by commas or spaces, e.g. '0001, 0012, 0041'."}}
+    output_type = "string"
+
+    def forward(self, record_ids: str) -> str:
+        ids = _parse_ids(record_ids)[:_MAX_BATCH]
+        if not ids:
+            return "No record_ids given."
+        ov = _load("tonal_plan_overview")
+        md = _load("metadata").set_index("record_id")
+        sub = ov[ov["record_id"].isin(ids)].copy()
+        if sub.empty:
+            return "No tonal plans for any of those record_ids."
+        sub["initial_key"] = sub["record_id"].map(md["initial_key"])
+        sub["year"] = sub["record_id"].map(md["year_of_composition"])
+        cols = ["record_id", "composer_name", "year", "initial_key", "tonal_plan"]
+        missing = [i for i in ids if i not in set(sub["record_id"])]
+        out = _fmt_table(sub, cols)
+        if missing:
+            out += f"\n(no data for: {', '.join(missing)})"
+        return out
+
+
+class DidoneSectionTonalPlansBatchTool(Tool):
+    name = "get_section_tonal_plans"
+    description = (
+        "Get the per-section tonal plans (R1/A1/B1... with each section's local "
+        "key sequence and measure span) for MANY arias at once, given a list of "
+        "record_ids. Use this to compare formal/tonal design -- e.g. how the B "
+        "section opens -- across a sample of arias. Returns CSV: record_id, "
+        "section_symbol, section_type, start_measure, end_measure, "
+        "section_tonal_plan. Max 80 ids."
+    )
+    inputs = {"record_ids": {"type": "string", "description": "record_ids separated by commas or spaces."}}
+    output_type = "string"
+
+    def forward(self, record_ids: str) -> str:
+        ids = _parse_ids(record_ids)[:_MAX_BATCH]
+        if not ids:
+            return "No record_ids given."
+        df = _load("section_tonal_plan")
+        sub = df[df["record_id"].isin(ids)]
+        if sub.empty:
+            return "No section tonal plans for any of those record_ids."
+        cols = ["record_id", "section_symbol", "section_type",
+                "section_start_measure", "section_end_measure", "section_tonal_plan"]
+        return _fmt_table(sub.sort_values(["record_id", "section_index"]), cols)
+
+
+class DidoneTextStructuresBatchTool(Tool):
+    name = "get_text_structures"
+    description = (
+        "Get the strophic/formal structure (written plan, repeat scheme, "
+        "performed plan) for MANY arias at once, given a list of record_ids. Use "
+        "this to compare an aria's text setting against other arias by the same "
+        "composer. Returns CSV: record_id, aria_name, written_plan, "
+        "repeat_scheme, performed_plan. Max 80 ids."
+    )
+    inputs = {"record_ids": {"type": "string", "description": "record_ids separated by commas or spaces."}}
+    output_type = "string"
+
+    def forward(self, record_ids: str) -> str:
+        ids = _parse_ids(record_ids)[:_MAX_BATCH]
+        if not ids:
+            return "No record_ids given."
+        df = _load("textual_plan_overview")
+        sub = df[df["record_id"].isin(ids)]
+        if sub.empty:
+            return "No text structures for any of those record_ids."
+        cols = ["record_id", "aria_name", "written_plan", "repeat_scheme", "performed_plan"]
+        return _fmt_table(sub, cols)
+
+
 def didone_tools() -> list[Tool]:
-    """All six Didone query tools, freshly instantiated."""
+    """All Didone query tools, freshly instantiated."""
     return [
         DidoneCorpusSearchTool(),
         DidoneMetadataTool(),
@@ -303,4 +397,7 @@ def didone_tools() -> list[Tool]:
         DidoneHarmonyTool(),
         DidoneSectionTonalPlanTool(),
         DidoneTextStructureTool(),
+        DidoneTonalPlansBatchTool(),
+        DidoneSectionTonalPlansBatchTool(),
+        DidoneTextStructuresBatchTool(),
     ]
