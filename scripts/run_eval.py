@@ -54,6 +54,11 @@ def _require_env(var_name: str) -> None:
         )
 
 
+def _warn_missing_env(var_name: str, why: str) -> None:
+    if not os.getenv(var_name):
+        print(f"⚠️  {var_name} not set -- {why}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the WeaveMuse manager agent over a dataset x prompt-variant sweep."
@@ -74,6 +79,15 @@ def parse_args() -> argparse.Namespace:
                               "specifically needs them; compounds VRAM pressure further.")
     parser.add_argument("--max-steps", type=int, default=5)
     parser.add_argument("--max-new-tokens", type=int, default=1536)
+    parser.add_argument("--model-id", default=None,
+                         help="Override the GPU-tier-recommended backbone model id "
+                              "(e.g. a smaller model on a 16GB Colab T4). Default: auto.")
+    parser.add_argument("--exclude-agents", default=None,
+                         help="Comma-separated sub-agent names to leave out of the manager "
+                              "entirely, e.g. 'symbolic_music_agent,audio_generation_agent,"
+                              "audio_analysis_agent' for an analysis-only sweep. Recognised: "
+                              "web_search_agent, symbolic_music_agent, audio_analysis_agent, "
+                              "audio_generation_agent, musicology_analysis_agent, chat_musician.")
     parser.add_argument("--task-ids", default=None,
                          help="Comma-separated subset of task_ids to run (default: all).")
     parser.add_argument("--variant-ids", default=None,
@@ -85,7 +99,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    _require_env("HF_TOKEN")
+    # HF_TOKEN is only strictly needed for HF-hosted tools (NotaGen / StableAudio /
+    # AudioFlamingo) and for gated backbone downloads. An analysis-only sweep that
+    # excludes those agents and uses an ungated backbone can run without it.
+    _warn_missing_env(
+        "HF_TOKEN",
+        "needed only for HF-hosted generative/audio tools and gated model downloads; "
+        "fine to omit for an analysis-only sweep.",
+    )
 
     from weavemuse.agents.models import TransformersModel
     from weavemuse.eval.gpu_guard import check_vram_headroom
@@ -105,9 +126,11 @@ def main() -> None:
     print("✅ Using 4-bit quantization for optimal VRAM usage" if quantization_config
           else "⚠️  Quantization disabled (CPU mode or not available)")
 
-    print(f"Backbone model: {gpu_info.recommended_model_id} (local, device_map={gpu_info.device_map})")
+    model_id = args.model_id or gpu_info.recommended_model_id
+    src = "user override" if args.model_id else "GPU-tier default"
+    print(f"Backbone model: {model_id} ({src}, local, device_map={gpu_info.device_map})")
     model = TransformersModel(
-        model_id=gpu_info.recommended_model_id,
+        model_id=model_id,
         trust_remote_code=True,
         device_map=gpu_info.device_map,
         torch_dtype="auto",
@@ -126,9 +149,10 @@ def main() -> None:
         device_map=gpu_info.device_map,
         max_steps=args.max_steps,
         max_new_tokens=args.max_new_tokens,
-        model_id=gpu_info.recommended_model_id,
+        model_id=model_id,
         task_ids=args.task_ids.split(",") if args.task_ids else None,
         variant_ids=args.variant_ids.split(",") if args.variant_ids else None,
+        exclude_agents=args.exclude_agents.split(",") if args.exclude_agents else None,
     )
 
     if args.limit is not None:

@@ -13,14 +13,16 @@ version = "0.2.1"
 description = "A comprehensive music agent framework using smolagents for generation and understanding"
 authors = [{name = "Emmanouil Karystinaios", email = "manoskaristineos@gmail.com"}]
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.14"
 license = {text = "MIT"}
 keywords = ["music", "ai", "agent", "generation", "understanding", "smolagents"]
 
 dependencies = [
     # Core framework and agents
         # AI agents and tools
-    "smolagents>=1.20.0",
+    # pinned: 1.22+ removed smolagents.models.remove_stop_sequences, used by
+    # weavemuse/agents/models.py (this is the version in uv.lock)
+    "smolagents>=1.21.0,<1.22",
     
     # Web interface and client
     "gradio>=4.0.0",
@@ -49,7 +51,7 @@ dependencies = [
     "torchsde",
     
     # Scientific computing
-    "numpy>=1.24.0,<2.0.0",
+    "numpy>=1.24.0",
     "pandas>=2.2.0",
     "scipy>=1.11.0",
     "matplotlib>=3.7.0",

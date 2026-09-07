@@ -38,6 +38,11 @@ def _require_env(var_name: str) -> None:
         )
 
 
+def _warn_missing_env(var_name: str, why: str) -> None:
+    if not os.getenv(var_name):
+        print(f"⚠️  {var_name} not set -- {why}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Score saved eval traces with an LLM judge.")
     parser.add_argument("--traces-dir", type=Path, required=True,
@@ -47,6 +52,10 @@ def parse_args() -> argparse.Namespace:
                          help="Where to write <task_id>/<variant_id>.judge.json files "
                               "(default: sibling 'scores/' dir next to --traces-dir).")
     parser.add_argument("--rubric", type=Path, default=DEFAULT_RUBRIC)
+    parser.add_argument("--dataset", type=Path, default=None,
+                         help="The tasks JSONL used for the run. If given, each task's "
+                              "metadata.reference (a domain-expert answer) is shown to the "
+                              "judge to score task_success against.")
     parser.add_argument("--backend", choices=["local", "remote"], default="local",
                          help="'local' (default): zero API cost, reuses a local TransformersModel "
                               "-- but see judge.py's self-judging-bias caveat if it's the same "
@@ -83,6 +92,17 @@ def main() -> None:
     if not trace_paths:
         raise SystemExit(f"No trace JSON files found under {args.traces_dir}")
 
+    tasks_by_id = None
+    if args.dataset:
+        tasks_by_id = {}
+        for line in args.dataset.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                d = json.loads(line)
+                tasks_by_id[d["task_id"]] = d
+        n_ref = sum(1 for d in tasks_by_id.values() if (d.get("metadata") or {}).get("reference"))
+        print(f"Loaded {len(tasks_by_id)} tasks ({n_ref} with a reference answer for the judge).")
+
     output_dir = args.output_dir or (args.traces_dir.parent / "scores")
 
     if args.backend == "remote":
@@ -94,7 +114,8 @@ def main() -> None:
         print(f"⚠️  --backend remote: {len(trace_paths)} calls to {judge_model_id}. "
               f"Re-run with --limit if this isn't what you meant.")
     else:
-        _require_env("HF_TOKEN")
+        _warn_missing_env("HF_TOKEN", "only needed for gated model downloads; "
+                          "the local judge model is ungated.")
         from weavemuse.agents.models import TransformersModel
         from weavemuse.eval.gpu_guard import check_vram_headroom
         from weavemuse.eval.judge import LocalJudgeBackend
@@ -130,6 +151,7 @@ def main() -> None:
             record = score_trace_file(
                 trace_path, backend, rubric,
                 judge_backend_name=args.backend, judge_model_id=judge_model_id,
+                tasks_by_id=tasks_by_id,
             )
         except (KeyError, json.JSONDecodeError) as e:
             # A file under --traces-dir that isn't a trace JSON (or is one

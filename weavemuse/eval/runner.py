@@ -49,6 +49,7 @@ class RunConfig:
     model_id: str = ""
     task_ids: list[str] | None = None
     variant_ids: list[str] | None = None
+    exclude_agents: list[str] | None = None
 
     def run_dir(self) -> Path:
         return self.output_dir / self.run_id
@@ -77,6 +78,7 @@ def build_manager_agent(model, variant: PromptVariant, cfg: RunConfig) -> CodeAg
         model=model,
         device_map=cfg.device_map,
         tool_mode=cfg.tool_mode,
+        exclude_agents=cfg.exclude_agents,
     )
     return CodeAgent(
         tools=weavemuse_tools,
@@ -87,7 +89,9 @@ def build_manager_agent(model, variant: PromptVariant, cfg: RunConfig) -> CodeAg
         instructions=variant.instructions,
         add_base_tools=True,
         max_steps=cfg.max_steps,
-        additional_authorized_imports=[],
+        # the prompts tell the agent tool results are JSON to parse; give it json
+        # (+ the light stdlib the sub-agent already has, for aggregating results)
+        additional_authorized_imports=["json", "math", "statistics", "collections", "re"],
         return_full_result=True,
     )
 
@@ -161,6 +165,7 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
             "max_steps": cfg.max_steps,
             "max_new_tokens": cfg.max_new_tokens,
             "model_id": cfg.model_id,
+            "exclude_agents": cfg.exclude_agents,
         },
         "output": output,
         "state": state,
@@ -215,6 +220,7 @@ def run_sweep(model, cfg: RunConfig) -> None:
         "max_steps": cfg.max_steps,
         "max_new_tokens": cfg.max_new_tokens,
         "model_id": cfg.model_id,
+        "exclude_agents": cfg.exclude_agents,
         "git_commit": _git_commit(),
         "task_ids": [t.task_id for t in tasks],
         "variant_ids": list(variants.keys()),
