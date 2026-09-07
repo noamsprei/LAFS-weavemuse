@@ -13,7 +13,7 @@ version = "0.2.1"
 description = "A comprehensive music agent framework using smolagents for generation and understanding"
 authors = [{name = "Emmanouil Karystinaios", email = "manoskaristineos@gmail.com"}]
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.14"
 license = {text = "MIT"}
 keywords = ["music", "ai", "agent", "generation", "understanding", "smolagents"]
 
