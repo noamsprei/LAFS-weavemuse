@@ -111,7 +111,7 @@ def create_musicology_agent(model, data_dir=None):
     if resolved:
         os.environ["DIDONE_DATA_DIR"] = resolved
 
-    return CodeAgent(
+    agent = CodeAgent(
         tools=didone_tools(),
         model=model,
         name="musicology_analysis_agent",
@@ -127,9 +127,20 @@ def create_musicology_agent(model, data_dir=None):
             "looks up evidence and reasons about it -- it does not play or synthesize "
             "audio."
         ),
+        instructions=(
+            "You answer only from data you have actually retrieved with your tools. "
+            "For every question: first call the relevant tool(s) with the record_id, "
+            "read their JSON output, then reason from it. Never invent or guess a "
+            "tonal plan, a key, a chord label, a Roman numeral, a measure number, a "
+            "cadence, or a section -- if a tool did not give you a value, say it is "
+            "unavailable. Do not write a final answer before you have called at "
+            "least one tool. Parse tool output with json.loads and read the fields; "
+            "do not string-split it."
+        ),
         additional_authorized_imports=["statistics", "collections", "json", "re", "math"],
         max_steps=12,
     )
+    return agent
 
 
 def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output_dir="/tmp/notagen_output", stable_audio_output_dir="/tmp/stable_audio", tool_mode="hybrid", include_musicology_agent=True, exclude_agents=None):
