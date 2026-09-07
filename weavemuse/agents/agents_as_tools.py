@@ -8,6 +8,7 @@ from weavemuse.tools.audio_analysis_tool import AudioAnalysisTool
 from weavemuse.tools.notagen_tool import NotaGenTool, RemoteNotaGenTool
 from weavemuse.tools.chat_musician_tool import ChatMusicianTool
 from weavemuse.tools.audio_flamingo_tool import AudioFlamingoTool
+import os
 import warnings
 
 
@@ -82,7 +83,56 @@ def create_audio_generation_agent(model, device_map="auto", output_dir="/tmp/sta
     return audio_generation_agent
 
 
-def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output_dir="/tmp/notagen_output", stable_audio_output_dir="/tmp/stable_audio", tool_mode="hybrid"):
+def create_musicology_agent(model, data_dir=None):
+    """Build the Didone musicology-analysis agent, or return None if the corpus
+    data isn't available.
+
+    This agent answers analytical questions about the Didone corpus (18th-c.
+    Italian opera arias) from pre-computed structured data via read-only CSV
+    lookup tools -- no GPU, no audio, no model weights. Its tools return
+    evidence (chord progressions, tonal plans, section structure), not
+    conclusions: cadence identification, style judgements and cross-corpus
+    norms are left to the agent's own reasoning.
+    """
+    from weavemuse.tools.didone_tools import didone_tools
+
+    resolved = data_dir or os.getenv("DIDONE_DATA_DIR")
+    # cheap availability check so a missing corpus degrades to "agent absent"
+    # rather than a hard failure when the manager routes to it
+    probe_root = resolved or os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    if not os.path.exists(os.path.join(probe_root, "metadata.csv")):
+        warnings.warn(
+            f"musicology_analysis_agent not created: metadata.csv not found under "
+            f"{probe_root!r}. Set DIDONE_DATA_DIR to enable it."
+        )
+        return None
+    if resolved:
+        os.environ["DIDONE_DATA_DIR"] = resolved
+
+    return CodeAgent(
+        tools=didone_tools(),
+        model=model,
+        name="musicology_analysis_agent",
+        description=(
+            "Answers analytical questions about the Didone corpus of 18th-century "
+            "Italian opera arias (multiple composers setting the same libretto texts, "
+            "c. 1720-1800) using pre-computed structured data: score metadata, tonal "
+            "plans, chord-by-chord Roman-numeral harmony, and formal/text section "
+            "structure. Use it for questions about modulation, cadences, harmonic "
+            "rhythm, tonal design, strophic form, style (galant vs Baroque, "
+            "stormy vs pastoral), and how one aria compares to others of its period "
+            "or composer. Pass the full question plus any known record_id. The agent "
+            "looks up evidence and reasons about it -- it does not play or synthesize "
+            "audio."
+        ),
+        additional_authorized_imports=["statistics", "collections", "json", "re", "math"],
+        max_steps=12,
+    )
+
+
+def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output_dir="/tmp/notagen_output", stable_audio_output_dir="/tmp/stable_audio", tool_mode="hybrid", include_musicology_agent=True):
     """
     Returns all WeaveMuse agents and tools as a list for easy access and management.
 
@@ -109,9 +159,14 @@ def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output
     audio_generation_agent = create_audio_generation_agent(model, device_map=device_map, output_dir=stable_audio_output_dir, remote_only=remote_only)
     web_agent = create_web_agent(model)
     tools = [] if remote_only else [chat_musician_tool]
-    return [            
+    agents = [
         symbolic_music_agent,
         audio_analysis_agent,
         audio_generation_agent,
-        web_agent
-    ], tools
+        web_agent,
+    ]
+    if include_musicology_agent:
+        musicology_agent = create_musicology_agent(model)
+        if musicology_agent is not None:
+            agents.append(musicology_agent)
+    return agents, tools
