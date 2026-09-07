@@ -44,8 +44,16 @@ causes OOM on small local backbones.
 `create_musicology_agent()` in `agents_as_tools.py` builds a `CodeAgent` with
 the nine tools; added to the manager's `managed_agents` by default. Degrades to
 "absent, with a warning" when the corpus isn't found, so the shipped GUI/
-terminal entrypoints are unaffected. The eval runner picks it up through its
-existing `get_weavemuse_agents_and_tools()` call.
+terminal entrypoints are unaffected.
+
+`get_weavemuse_agents_and_tools()` gained an `exclude_agents` parameter (and
+`run_eval.py` a `--exclude-agents` flag). For this study the manager keeps
+`musicology_analysis_agent`, `chat_musician`, and `web_search_agent`; the
+generative and audio agents are excluded — the tasks are symbolic/metadata
+analysis with no generation or audio input, so those agents would only ever be
+mis-routes. Keeping `chat_musician` (a local model) means the sweep needs a GPU
+and `--tool-mode hybrid`. `HF_TOKEN` is now a warning, not a hard requirement,
+since no HF-hosted agent is in the set.
 
 ## 5. Questions — `data/eval/tasks_musicology.jsonl` (56)
 

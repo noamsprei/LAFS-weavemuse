@@ -132,7 +132,7 @@ def create_musicology_agent(model, data_dir=None):
     )
 
 
-def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output_dir="/tmp/notagen_output", stable_audio_output_dir="/tmp/stable_audio", tool_mode="hybrid", include_musicology_agent=True):
+def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output_dir="/tmp/notagen_output", stable_audio_output_dir="/tmp/stable_audio", tool_mode="hybrid", include_musicology_agent=True, exclude_agents=None):
     """
     Returns all WeaveMuse agents and tools as a list for easy access and management.
 
@@ -141,7 +141,14 @@ def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output
         device_map (str): Device mapping for model deployment (default is "auto").
         notagen_output_dir (str): Output directory for NotaGen tool (default is "/tmp/notagen_output").
         stable_audio_output_dir (str): Output directory for Stable Audio tool (default
-    
+        include_musicology_agent (bool): build the Didone musicology-analysis agent
+            (skipped anyway if its corpus data can't be found).
+        exclude_agents (Iterable[str] | None): names to leave out entirely -- neither
+            constructed nor returned. Recognised: "web_search_agent",
+            "symbolic_music_agent", "audio_analysis_agent", "audio_generation_agent",
+            "musicology_analysis_agent", and "chat_musician" (the top-level tool).
+            Use this to run the manager with only a subset of capabilities, e.g.
+            exclude the two generative agents for an analysis-only study.
     """
     # If model is not provided, load a default InferenceClient model
     if model is None:
@@ -152,20 +159,23 @@ def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output
             # nebius no longer serves this model (see gui.py's set_up_agents for details)
             provider="featherless-ai"
         )
-    remote_only = (tool_mode == "remote")       
-    chat_musician_tool = ChatMusicianTool(device=device_map)
-    symbolic_music_agent = create_symbolic_music_agent(model, device_map=device_map, output_dir=notagen_output_dir, remote_only=remote_only)
-    audio_analysis_agent = create_audio_analysis_agent(model, device_map=device_map, remote_only=remote_only)
-    audio_generation_agent = create_audio_generation_agent(model, device_map=device_map, output_dir=stable_audio_output_dir, remote_only=remote_only)
-    web_agent = create_web_agent(model)
-    tools = [] if remote_only else [chat_musician_tool]
-    agents = [
-        symbolic_music_agent,
-        audio_analysis_agent,
-        audio_generation_agent,
-        web_agent,
-    ]
-    if include_musicology_agent:
+    excluded = set(exclude_agents or ())
+    remote_only = (tool_mode == "remote")
+
+    tools = []
+    if "chat_musician" not in excluded and not remote_only:
+        tools.append(ChatMusicianTool(device=device_map))
+
+    agents = []
+    if "symbolic_music_agent" not in excluded:
+        agents.append(create_symbolic_music_agent(model, device_map=device_map, output_dir=notagen_output_dir, remote_only=remote_only))
+    if "audio_analysis_agent" not in excluded:
+        agents.append(create_audio_analysis_agent(model, device_map=device_map, remote_only=remote_only))
+    if "audio_generation_agent" not in excluded:
+        agents.append(create_audio_generation_agent(model, device_map=device_map, output_dir=stable_audio_output_dir, remote_only=remote_only))
+    if "web_search_agent" not in excluded:
+        agents.append(create_web_agent(model))
+    if include_musicology_agent and "musicology_analysis_agent" not in excluded:
         musicology_agent = create_musicology_agent(model)
         if musicology_agent is not None:
             agents.append(musicology_agent)
