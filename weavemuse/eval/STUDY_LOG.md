@@ -164,3 +164,38 @@ anything this round:
   finding about the harness floor (Colab can't host a bigger un-quantized model).
 - Hand-grade ~5 final answers to calibrate the judge against the references.
 - `scripts/summarize_eval.py` to pivot judge scores to task × variant × criterion.
+
+---
+
+## For the write-up (the parts that matter)
+
+**Setup.** Backbone: Qwen2.5-Coder-14B, 4-bit, local on a Colab A100. 7B was
+below the usable floor (fabricated tool use); 32B did not fit Colab disk -- so
+14B is a stated capability ceiling on the results. Manager runs with the
+analysis agents only (`musicology_analysis_agent`, `chat_musician`, web search);
+generative/audio agents excluded because no task needs them.
+
+**Method.** Same 56 questions under two manager prompts -- `default` (stock) vs
+`expert` (musicological concept definitions + decomposition framing, naming no
+tools). Traces captured, scored by an LLM judge (Claude Haiku remote) on a
+4-criterion rubric. For SW1/SW2/SW4/MW1, the judge is given a reference answer
+computed directly from the Didone data (`build_references.py`); SW3/SW5/MW2/MW3
+are human-graded on a calibration sample.
+
+**Design choices that affect validity.**
+- Tools return evidence (tonal plans, chord tables, section structure), never
+  conclusions -- cadence typing, style and norm judgements are the agent's, and
+  are the dependent variable.
+- "Modulation count" is criterion-dependent; SW1 fixes the criterion
+  (cadentially confirmed key area, >= ~8 bars).
+- smolagents' default managed-sub-agent prompt template had to be replaced: the
+  stock "your answer must contain sections 1/2/3, everything else is lost"
+  wording drives a mid-size model to fabricate a structured answer before
+  calling any tool. Worth reporting as a scaffolding finding in its own right.
+- 12-aria purposive sample, frozen pre-run (small; stated limitation).
+
+**Preliminary observations (smoke tests, n small -- not results).** 14B routes
+to the right sub-agent reliably. On SW1 both prompt conditions produced weak
+analysis: literal counting of data fields, self-contradiction, and (pre-fix)
+fabrication before tool use. No clear expert-prompt benefit on the single task
+tested so far.
