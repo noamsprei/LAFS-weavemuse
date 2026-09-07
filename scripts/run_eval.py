@@ -74,6 +74,9 @@ def parse_args() -> argparse.Namespace:
                               "specifically needs them; compounds VRAM pressure further.")
     parser.add_argument("--max-steps", type=int, default=5)
     parser.add_argument("--max-new-tokens", type=int, default=1536)
+    parser.add_argument("--model-id", default=None,
+                         help="Override the GPU-tier-recommended backbone model id "
+                              "(e.g. a smaller model on a 16GB Colab T4). Default: auto.")
     parser.add_argument("--task-ids", default=None,
                          help="Comma-separated subset of task_ids to run (default: all).")
     parser.add_argument("--variant-ids", default=None,
@@ -105,9 +108,11 @@ def main() -> None:
     print("✅ Using 4-bit quantization for optimal VRAM usage" if quantization_config
           else "⚠️  Quantization disabled (CPU mode or not available)")
 
-    print(f"Backbone model: {gpu_info.recommended_model_id} (local, device_map={gpu_info.device_map})")
+    model_id = args.model_id or gpu_info.recommended_model_id
+    src = "user override" if args.model_id else "GPU-tier default"
+    print(f"Backbone model: {model_id} ({src}, local, device_map={gpu_info.device_map})")
     model = TransformersModel(
-        model_id=gpu_info.recommended_model_id,
+        model_id=model_id,
         trust_remote_code=True,
         device_map=gpu_info.device_map,
         torch_dtype="auto",
@@ -126,7 +131,7 @@ def main() -> None:
         device_map=gpu_info.device_map,
         max_steps=args.max_steps,
         max_new_tokens=args.max_new_tokens,
-        model_id=gpu_info.recommended_model_id,
+        model_id=model_id,
         task_ids=args.task_ids.split(",") if args.task_ids else None,
         variant_ids=args.variant_ids.split(",") if args.variant_ids else None,
     )
