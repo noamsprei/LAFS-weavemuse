@@ -20,7 +20,9 @@ keywords = ["music", "ai", "agent", "generation", "understanding", "smolagents"]
 dependencies = [
     # Core framework and agents
         # AI agents and tools
-    "smolagents>=1.20.0",
+    # pinned: 1.22+ removed smolagents.models.remove_stop_sequences, used by
+    # weavemuse/agents/models.py (this is the version in uv.lock)
+    "smolagents>=1.21.0,<1.22",
     
     # Web interface and client
     "gradio>=4.0.0",
