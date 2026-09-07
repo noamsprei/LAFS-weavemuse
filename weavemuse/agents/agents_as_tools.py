@@ -138,8 +138,31 @@ def create_musicology_agent(model, data_dir=None):
             "do not string-split it."
         ),
         additional_authorized_imports=["statistics", "collections", "json", "re", "math"],
-        max_steps=12,
+        max_steps=16,  # multi-work + paged get_harmony walks can need >12
     )
+    # Replace smolagents' default managed-agent task wrapper. The stock version
+    # front-loads "your final_answer WILL HAVE to contain ### 1 / ### 2 / ### 3"
+    # which pushes a mid-size model to emit a fabricated structured answer on
+    # step 1 without calling any tool. This version demands tool use first.
+    try:
+        agent.prompt_templates["managed_agent"]["task"] = (
+            "You are '{{name}}', a musicology-analysis agent called by a manager "
+            "agent to answer one question about a Didone-corpus aria.\n\n"
+            "Question:\n{{task}}\n\n"
+            "Work through it step by step IN CODE:\n"
+            "1. Call the relevant tool(s) with the record_id (get_tonal_plan, "
+            "get_harmony, get_section_tonal_plan, get_aria_metadata, ...). You MUST "
+            "call at least one tool before answering.\n"
+            "2. Parse each result with json.loads and read the fields.\n"
+            "3. Reason from what the tools actually returned. Never invent a key, a "
+            "Roman numeral, a measure number, a cadence, or a section.\n"
+            "4. Only then call final_answer(...) with: a one-sentence answer, then "
+            "the concrete evidence you retrieved, then any caveats.\n\n"
+            "Every code step must be a ```py block. If you cannot get a value from "
+            "a tool, say so explicitly rather than guessing."
+        )
+    except (KeyError, TypeError):
+        pass
     return agent
 
 

@@ -131,11 +131,36 @@ Also observed: 7B backbone is below the usable floor (hallucinated `import
 requests` to fetch a fake corpus URL). 14B on A100 routes correctly; 32B may be
 worth trying for cleaner tool-use code.
 
+## 9. Batch of fixes after the fabrication smoke (upfront, not one-per-run)
+
+The 14B sub-agent kept emitting a fabricated tonal plan on step 1 instead of
+calling a tool. Root cause: smolagents' default managed-agent task wrapper
+("your final_answer WILL HAVE to contain ### 1 / ### 2 / ### 3, everything else
+is lost") pushes a mid-size model straight to filling that template from
+imagination. Verified against the smolagents 1.21.3 source before changing
+anything this round:
+
+- `create_musicology_agent` now **overrides** `prompt_templates["managed_agent"]
+  ["task"]` with a version that demands a tool call before any answer, in code,
+  no invented values. Also adds an `instructions=` guardrail and raises the
+  sub-agent `max_steps` 12 -> 16 (paged `get_harmony` walks for SW2).
+- Manager `additional_authorized_imports` was `[]` while the new prompts tell it
+  to `json.loads` tool output -> added json/math/statistics/collections/re.
+- `run_judge.py` no longer hard-requires HF_TOKEN for `--backend local`.
+- Judge now takes `--dataset`: each task's `metadata.reference` (when present) is
+  shown to the judge as the expert answer to score task_success against.
+- `scripts/build_references.py` computes those references for the scriptable
+  question types (sw1_modulation, sw2_cadences, sw4_strophic, mw1_period_norm)
+  straight from the Didone tools, into `data/eval/tasks_musicology.local.jsonl`
+  (gitignored -- derived from the confidential corpus). 37/56 tasks get a
+  reference; sw3/sw5/mw2/mw3 stay for human calibration grading.
+- `get_tonal_plan` reference note: flags when metadata home key and the
+  tonal-plan opening region disagree (e.g. record 0001).
+
 ## Open items
 
-- Re-run the smoke task with the JSON tools + updated prompts; confirm cleaner
-  traces before the core sweep.
-- Extend the LLM judge to score against per-question expectations (the `metadata`
-  in each task is preserved but not yet read by `judge.py`).
-- Hand-grade ~5 final answers to calibrate the judge.
+- Re-run the smoke (smoke4) and confirm the sub-agent now calls tools first.
+- If 14B still fabricates: a pre-quantized 32B (AWQ, ~19GB) or accept it as a
+  finding about the harness floor (Colab can't host a bigger un-quantized model).
+- Hand-grade ~5 final answers to calibrate the judge against the references.
 - `scripts/summarize_eval.py` to pivot judge scores to task × variant × criterion.

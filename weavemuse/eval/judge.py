@@ -110,16 +110,24 @@ def summarize_trace_for_judge(trace_record: dict, max_chars_per_step: int = 800)
     return "\n".join(lines)
 
 
-def build_judge_prompt(rubric: dict, task: EvalTask, trace_record: dict) -> str:
+def build_judge_prompt(
+    rubric: dict, task: EvalTask, trace_record: dict, reference: str | None = None
+) -> str:
     criteria_desc = "\n".join(
         f"- {name}: {c['description']} (scale: {c['scale']})"
         for name, c in rubric["criteria"].items()
     )
     trace_summary = summarize_trace_for_judge(trace_record)
+    reference_block = (
+        f"\nReference (a domain expert's answer / analytical plan for this task -- "
+        f"judge task_success and reasoning against this, not against your own "
+        f"guess):\n{reference}\n"
+        if reference else ""
+    )
     return f"""You are evaluating the quality of an AI agent's execution trace on a task.
 
 Task query: {task.query}
-
+{reference_block}
 Prompt/instructions the agent was given (this is what varies across the study -- \
 judge how well the agent's behavior reflects these instructions, not just whether \
 it succeeded):
@@ -167,16 +175,25 @@ def score_trace_file(
     rubric: dict,
     judge_backend_name: str,
     judge_model_id: str,
+    tasks_by_id: dict | None = None,
 ) -> dict:
     """Load one trace JSON, build the judge prompt, score it, return the
     score record (same shape written to disk by scripts/run_judge.py).
+
+    If `tasks_by_id` (task_id -> task dict from the dataset) is given and the
+    task's metadata carries a "reference" field, that reference is shown to
+    the judge as the expert answer to score task_success against.
     """
     path = Path(path)
     with path.open("r", encoding="utf-8") as f:
         trace_record = json.load(f)
 
     task = EvalTask(task_id=trace_record["task_id"], query=trace_record["query"])
-    prompt = build_judge_prompt(rubric, task, trace_record)
+    reference = None
+    if tasks_by_id:
+        meta = (tasks_by_id.get(trace_record["task_id"]) or {}).get("metadata") or {}
+        reference = meta.get("reference")
+    prompt = build_judge_prompt(rubric, task, trace_record, reference=reference)
     raw_response = backend.score(prompt)
     parsed = parse_judge_json(raw_response)
 

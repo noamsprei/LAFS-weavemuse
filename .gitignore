@@ -230,3 +230,8 @@ metadata.csv
 
 # IDE
 .idea/csv-editor.xml
+
+# Eval artifacts derived from the confidential corpus (references, augmented datasets)
+data/eval/*.local.jsonl
+data/eval/references_*.json
+outputs/
