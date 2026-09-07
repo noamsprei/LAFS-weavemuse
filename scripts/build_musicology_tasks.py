@@ -19,11 +19,15 @@ OUT = REPO / "data" / "eval" / "tasks_musicology.jsonl"
 # {ref} is filled with "record_id N (Composer's YEAR setting of 'ARIA')"
 Q = {
     "sw1_modulation": (
-        "For the Didone-corpus aria {ref}: does it modulate? If so, how many "
-        "times, and what is its overall tonal scheme (the ordered key areas)? "
-        "Base the judgement on where the music cadences in a new key; a passing "
-        "tonicisation is not a modulation. 'It stays within the tonic and its "
-        "dominant' is an acceptable answer if that is what the evidence shows."
+        "For the Didone-corpus aria {ref}: give its tonal scheme -- the ordered "
+        "sequence of key areas -- and then count the CONFIRMED modulations. Count "
+        "a key area as a confirmed modulation only if the music establishes it "
+        "with its own cadence (a phrase closing with a perfect or half cadence in "
+        "that key); a region of only a few bars that is passed through without a "
+        "cadential close is a tonicisation and does NOT count. The da capo return "
+        "to the opening key is a return, not a new modulation. Report: the ordered "
+        "key areas, which of them are confirmed modulations (with the cadential "
+        "evidence), and the total confirmed count."
     ),
     "sw2_cadences": (
         "For the Didone-corpus aria {ref}: how many cadences does it contain, "

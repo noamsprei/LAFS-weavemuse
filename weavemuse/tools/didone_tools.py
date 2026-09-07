@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -123,6 +124,54 @@ def _dump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2, default=str)
 
 
+_BARE_KEY_RE = re.compile(r"^[A-Ga-g][b#]?$")
+
+
+def _parse_home(initial_key: str | None):
+    """'A major' / 'Bb minor' -> ('A', 'major'). None if unparseable."""
+    if not initial_key:
+        return None
+    m = re.match(r"\s*([A-Ga-g])([b#]?)\s*(major|minor|maj|min)?", str(initial_key))
+    if not m:
+        return None
+    tonic = m.group(1).upper() + m.group(2)
+    mode = (m.group(3) or "major").lower()
+    mode = "minor" if mode.startswith("min") else "major"
+    return tonic, mode
+
+
+@lru_cache(maxsize=4096)
+def _abs_key(home_initial_key: str | None, region: str | None) -> str | None:
+    """Absolute key of a tonal region given the aria's home key and the region's
+    Roman-numeral label (e.g. home 'A major' + region 'V' -> 'E major';
+    'vi' -> 'F# minor'). Returns None if it can't be resolved.
+    """
+    if not region:
+        return None
+    region = str(region).strip()
+    home = _parse_home(home_initial_key)
+    if _BARE_KEY_RE.match(region):
+        # segment labelled with a bare key letter (usually segment 1 == home);
+        # letter case carries the mode (lower = minor)
+        letter = region[0].upper() + region[1:]
+        mode = "minor" if region[0].islower() else "major"
+        if home and letter.rstrip("b#") == home[0].rstrip("b#"):
+            return f"{home[0]} {home[1]}"
+        return f"{letter} {mode}"
+    if not home:
+        return None
+    try:
+        from music21 import key as m21key
+        from music21 import roman
+        k = m21key.Key(home[0], home[1])
+        rn = roman.RomanNumeral(region, k)
+        root = rn.root().name.replace("-", "b")
+        mode = "minor" if region[:1].islower() else "major"
+        return f"{root} {mode}"
+    except Exception:
+        return None
+
+
 # --- tools ---------------------------------------------------------------
 
 class DidoneCorpusSearchTool(Tool):
@@ -213,43 +262,54 @@ class DidoneTonalPlanTool(Tool):
     description = (
         "Get the tonal plan of one aria. Returns a JSON object with: tonal_plan "
         "(the ordered key-area string), home_key, and segments -- a list where "
-        "each entry gives the measure span, region label, absolute key, the "
-        "harmonic function it opens and closes on (closes_on is your cadence "
-        "evidence at that segment boundary), the modulation type, and a "
-        "confidence score. Read the JSON directly; do not string-split it. Use "
-        "this for questions about modulation and overall tonal design."
+        "each entry gives the measure span, the region as a Roman numeral "
+        "relative to the home key, the absolute key of that region, the harmonic "
+        "function the segment opens and closes on (closes_on is your cadence "
+        "evidence -- whether the segment ends with a cadential close IN that "
+        "region), an annotation boundary_type, and a confidence score. Read the "
+        "JSON directly; do not string-split it. Whether a short region counts as "
+        "a real modulation or just a passing tonicisation is for you to judge "
+        "from its length and closes_on -- the tool does not label that."
     )
     inputs = {"record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."}}
     output_type = "string"
 
     def forward(self, record_id: str) -> str:
         ov = _row("tonal_plan_overview", record_id)
+        md = _row("metadata", record_id)
         seg = _load("tonal_plan_segments")
         seg = seg[seg["record_id"] == str(record_id).strip()].sort_values("segment_index")
         if ov is None and seg.empty:
             return _dump({"error": f"no tonal plan for record_id {record_id!r}"})
 
+        home_initial = _clean(md["initial_key"]) if md is not None else None
+        if not home_initial and not seg.empty:
+            home_initial = _clean(seg.iloc[0]["absolute_key"])
+
         segments = []
         for _, r in seg.iterrows():
+            region = _clean(r["region_label"])
+            key = _abs_key(home_initial, region) or _clean(r["absolute_key"])
+            try:
+                span = int(_clean(r["end_measure"])) - int(_clean(r["start_measure"]))
+            except (TypeError, ValueError):
+                span = None
             segments.append({
                 "segment": _clean(r["segment_index"]),
                 "measures": f"{_clean(r['start_measure'])}-{_clean(r['end_measure'])}",
-                "region": _clean(r["region_label"]),
-                "absolute_key": _clean(r["absolute_key"]),
+                "length_measures": span,
+                "region": region,
+                "key": key,
                 "opens_on": _clean(r["opening_function"]),
                 "closes_on": _clean(r["closing_function"]),
-                "modulation_type": _clean(r["modulation_type"]),
-                "parent_region": _clean(r["parent_region"]),
+                "boundary_type": _clean(r["modulation_type"]),
                 "confidence": _clean(r["confidence"]),
             })
-        home_key = None
-        if segments:
-            home_key = segments[0]["absolute_key"] or segments[0]["region"]
 
         return _dump({
             "record_id": str(record_id).strip(),
             "tonal_plan": _clean(ov["tonal_plan"]) if ov is not None else None,
-            "home_key": home_key,
+            "home_key": home_initial or (segments[0]["key"] if segments else None),
             "n_segments": len(segments),
             "segments": segments,
         })

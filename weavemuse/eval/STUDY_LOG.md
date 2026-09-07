@@ -100,6 +100,33 @@ Known, not yet addressed: the managed-agent "### 1/2/3" response template
 induces some hallucinated padding in section 3. It is constant across both
 conditions so it does not confound the comparison; left alone for now.
 
+## 8. Second smoke (JSON tools) + tonal-plan fixes
+
+JSON tools fixed the string-parsing crashes, but both variants still answered
+`sw1_modulation__0012` badly and in opposite directions: default computed "0
+modulations" (broken loop), expert computed "7" (counted every segment whose
+annotation `modulation_type != "none"`, incl. the opening) and printed
+"modulates to None" six times. Root causes:
+
+- `get_tonal_plan` returned `absolute_key` only for segment 1 (blank for the
+  rest in the source), so 6/7 segments showed key `null`.
+- The `modulation_type` field ("initial" / "explicit_region_marker") is an
+  annotation-boundary label, not a modulation-vs-tonicisation judgement, and
+  the agent counted it literally.
+- "how many times does it modulate" has no single answer -- strict (cadentially
+  confirmed) gives ~1-2, liberal (every region visited) gives ~6-7.
+
+Fixes:
+- `get_tonal_plan` now computes each segment's absolute key from the home key +
+  the Roman-numeral region label (via music21), adds `length_measures`, renames
+  `modulation_type` -> `boundary_type`, drops `parent_region`. Every segment now
+  has a real key and a length; the tool still does not label modulation vs
+  tonicisation (that is the agent's call).
+- SW1 rewritten to define the target: count a key area as a confirmed
+  modulation only if a phrase cadences (perfect or half) in that key; short
+  passed-through regions do not count; the da capo return is not a modulation.
+  Now gradeable.
+
 Also observed: 7B backbone is below the usable floor (hallucinated `import
 requests` to fetch a fake corpus URL). 14B on A100 routes correctly; 32B may be
 worth trying for cleaner tool-use code.
