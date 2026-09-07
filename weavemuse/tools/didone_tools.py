@@ -5,6 +5,9 @@ These tools expose the pre-computed structured analyses of the Didone dataset
 libretto texts across ~1720-1800) as smolagents tools. They are read-only
 CSV lookups: no model weights, no GPU, no MIDI parsing at call time.
 
+Every tool returns a JSON string. Read the parsed structure directly -- do not
+write string-splitting code to pull fields out of it.
+
 Data location is resolved from ``$DIDONE_DATA_DIR`` (default: the repo root),
 which must contain::
 
@@ -25,6 +28,8 @@ the study measures.
 
 from __future__ import annotations
 
+import json
+import math
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -89,11 +94,33 @@ def _row(name: str, record_id: str) -> pd.Series | None:
     return None if hit.empty else hit.iloc[0]
 
 
-def _fmt_table(df: pd.DataFrame, cols: list[str], limit: int | None = None) -> str:
-    view = df[cols].head(limit) if limit else df[cols]
-    if view.empty:
-        return "(no rows)"
-    return view.to_csv(index=False).strip()
+def _clean(v):
+    """pandas/NaN -> JSON-safe scalar."""
+    if v is None:
+        return None
+    if isinstance(v, float) and math.isnan(v):
+        return None
+    if isinstance(v, str) and v.strip() == "":
+        return None
+    try:
+        import numpy as np
+        if isinstance(v, np.generic):
+            return v.item()
+    except Exception:
+        pass
+    return v
+
+
+def _records(df: pd.DataFrame, cols: list[str], rename: dict | None = None) -> list[dict]:
+    rename = rename or {}
+    out = []
+    for _, r in df.iterrows():
+        out.append({rename.get(c, c): _clean(r[c]) for c in cols})
+    return out
+
+
+def _dump(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, indent=2, default=str)
 
 
 # --- tools ---------------------------------------------------------------
@@ -105,8 +132,9 @@ class DidoneCorpusSearchTool(Tool):
         "combination of filters and get back a list of matching arias with their "
         "record_id and basic metadata. Use this to build a comparison sample -- "
         "e.g. every aria from the 1740s, or every setting by a given composer, or "
-        "every setting of the same aria text. Returns CSV text: "
-        "record_id, aria_name, composer, year, decade, initial_key, initial_meter, initial_tempo_text."
+        "every setting of the same aria text. Returns a JSON object "
+        "{n_matches, arias:[{record_id, aria_name, composer, year, decade, "
+        "initial_key, initial_meter, initial_tempo}]}. Read the JSON directly."
     )
     inputs = {
         "aria_name": {"type": "string", "description": "Exact aria text/title, e.g. 'Se resto sul lido'. Case-insensitive.", "nullable": True},
@@ -136,10 +164,16 @@ class DidoneCorpusSearchTool(Tool):
         if initial_key:
             df = df[df["initial_key"].str.contains(initial_key, case=False, na=False)]
         df = df.sort_values(["_year", "composer"])
+        total = len(df)
+        df = df.head(int(limit) if limit else 60)
         cols = ["record_id", "aria_name", "composer", "year_of_composition",
                 "decade", "initial_key", "initial_meter", "initial_tempo_text"]
-        out = _fmt_table(df, cols, limit=int(limit) if limit else 60)
-        return f"{len(df)} match(es).\n{out}"
+        rename = {"year_of_composition": "year", "initial_tempo_text": "initial_tempo"}
+        return _dump({
+            "n_matches": total,
+            "returned": len(df),
+            "arias": _records(df, cols, rename),
+        })
 
 
 class DidoneMetadataTool(Tool):
@@ -149,7 +183,8 @@ class DidoneMetadataTool(Tool):
         "opera, character, opening key and key-change count, meter (and whether "
         "it changes), tempo marking and tempo family, da capo / repeat scheme, "
         "measure count, note density, lyric syllable density, and instrumentation. "
-        "Does NOT contain the harmonic analysis -- use get_tonal_plan / get_harmony for that."
+        "Returns a JSON object. Does NOT contain the harmonic analysis -- use "
+        "get_tonal_plan / get_harmony for that."
     )
     inputs = {"record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."}}
     output_type = "string"
@@ -157,35 +192,32 @@ class DidoneMetadataTool(Tool):
     def forward(self, record_id: str) -> str:
         r = _row("metadata", record_id)
         if r is None:
-            return f"No aria with record_id {record_id!r}."
-        f = [
-            f"record_id: {r['record_id']}",
-            f"aria_name: {r['aria_name']}",
-            f"composer: {r['composer']}",
-            f"year_of_composition: {r['year_of_composition']}   decade: {r['decade']}",
-            f"opera: {r['opera_name']}   character: {r['character'] or '(unknown)'}",
-            f"initial_key: {r['initial_key'] or '(not parsed)'}   key_signature_changes: {r['n_key_signature_changes']}",
-            f"initial_meter: {r['initial_meter']}   meter_family: {r['meter_family']}   meter_changes: {r['n_meter_changes']}   unique_meters: {r['unique_meters']}",
-            f"initial_tempo_text: {r['initial_tempo_text']}   tempo_family: {r['tempo_family']}   tempo_changes: {r['n_tempo_changes']}",
-            f"repeat_type: {r['repeat_type']}   has_segno: {r['has_segno']}   has_coda: {r['has_coda']}   has_fine: {r['has_fine']}",
-            f"n_measures_written: {r['n_measures_written']}   vocal_measures: {r['vocal_measures_count']} (mm. {r['first_vocal_measure']}-{r['last_vocal_measure']})",
-            f"note_density_per_measure: {r['note_density_per_measure']}   n_notes: {r['n_notes']}   n_rests: {r['n_rests']}   n_tuplets: {r['n_tuplets']}",
-            f"lyric_density_per_measure: {r['lyric_density_per_measure']}   n_lyric_syllables: {r['n_lyric_syllables']}",
-            f"harmony_annotation_density: {r['harmony_annotation_density']}   n_harmony_annotations: {r['n_harmony_annotations']}",
-            f"instrumentation_signature: {r['instrumentation_signature']}",
+            return _dump({"error": f"no aria with record_id {record_id!r}"})
+        cols = [
+            "record_id", "aria_name", "composer", "year_of_composition", "decade",
+            "opera_name", "character", "initial_key", "n_key_signature_changes",
+            "initial_meter", "meter_family", "n_meter_changes", "unique_meters",
+            "initial_tempo_text", "tempo_family", "n_tempo_changes",
+            "repeat_type", "has_segno", "has_coda", "has_fine",
+            "n_measures_written", "vocal_measures_count", "first_vocal_measure",
+            "last_vocal_measure", "note_density_per_measure", "n_notes", "n_rests",
+            "n_tuplets", "lyric_density_per_measure", "n_lyric_syllables",
+            "harmony_annotation_density", "n_harmony_annotations",
+            "instrumentation_signature",
         ]
-        return "\n".join(f)
+        return _dump({c: _clean(r[c]) for c in cols})
 
 
 class DidoneTonalPlanTool(Tool):
     name = "get_tonal_plan"
     description = (
-        "Get the tonal plan of one aria: the high-level sequence of key areas it "
-        "visits (as a Roman-numeral / key-letter string), plus a per-segment "
-        "breakdown -- for each tonal segment: measure span, region label, absolute "
-        "key, opening and closing harmonic function, modulation type, and a "
-        "confidence score. Use this for questions about modulation and overall "
-        "tonal design."
+        "Get the tonal plan of one aria. Returns a JSON object with: tonal_plan "
+        "(the ordered key-area string), home_key, and segments -- a list where "
+        "each entry gives the measure span, region label, absolute key, the "
+        "harmonic function it opens and closes on (closes_on is your cadence "
+        "evidence at that segment boundary), the modulation type, and a "
+        "confidence score. Read the JSON directly; do not string-split it. Use "
+        "this for questions about modulation and overall tonal design."
     )
     inputs = {"record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."}}
     output_type = "string"
@@ -193,29 +225,46 @@ class DidoneTonalPlanTool(Tool):
     def forward(self, record_id: str) -> str:
         ov = _row("tonal_plan_overview", record_id)
         seg = _load("tonal_plan_segments")
-        seg = seg[seg["record_id"] == str(record_id).strip()]
+        seg = seg[seg["record_id"] == str(record_id).strip()].sort_values("segment_index")
         if ov is None and seg.empty:
-            return f"No tonal plan for record_id {record_id!r}."
-        head = f"tonal_plan: {ov['tonal_plan']}" if ov is not None else "tonal_plan: (overview row missing)"
-        if seg.empty:
-            return head + "\n(no per-segment breakdown)"
-        cols = ["segment_index", "start_measure", "end_measure", "region_label",
-                "absolute_key", "opening_function", "closing_function",
-                "modulation_type", "parent_region", "confidence"]
-        return f"{head}\n\nsegments:\n{_fmt_table(seg.sort_values('segment_index'), cols)}"
+            return _dump({"error": f"no tonal plan for record_id {record_id!r}"})
+
+        segments = []
+        for _, r in seg.iterrows():
+            segments.append({
+                "segment": _clean(r["segment_index"]),
+                "measures": f"{_clean(r['start_measure'])}-{_clean(r['end_measure'])}",
+                "region": _clean(r["region_label"]),
+                "absolute_key": _clean(r["absolute_key"]),
+                "opens_on": _clean(r["opening_function"]),
+                "closes_on": _clean(r["closing_function"]),
+                "modulation_type": _clean(r["modulation_type"]),
+                "parent_region": _clean(r["parent_region"]),
+                "confidence": _clean(r["confidence"]),
+            })
+        home_key = None
+        if segments:
+            home_key = segments[0]["absolute_key"] or segments[0]["region"]
+
+        return _dump({
+            "record_id": str(record_id).strip(),
+            "tonal_plan": _clean(ov["tonal_plan"]) if ov is not None else None,
+            "home_key": home_key,
+            "n_segments": len(segments),
+            "segments": segments,
+        })
 
 
 class DidoneHarmonyTool(Tool):
     name = "get_harmony"
     description = (
-        "Get the chord-by-chord harmonic analysis of one aria over a measure "
-        "range (Roman-numeral analysis). For each chord event: measure, beat, "
-        "the chord label, its local function, the active tonal region/key, "
-        "whether it is a secondary dominant (and of what), inversion, chord "
-        "quality, and phrase-boundary flags. There is NO cadence label -- infer "
-        f"cadences yourself from the progression and phrase_end flags. Max "
-        f"{_MAX_HARMONY_SPAN} measures per call; page through a long aria with "
-        "several calls."
+        "Get the chord-by-chord Roman-numeral analysis of one aria over a "
+        "measure range. Returns a JSON object {record_id, from_measure, "
+        "to_measure, n_events, chords:[{measure, beat, label, function, "
+        "tonal_region, secondary_dominant_of, inversion, quality, phrase_start, "
+        "phrase_end}]}. There is NO cadence label -- infer cadences yourself from "
+        "the progression into each phrase_end. Read the JSON directly. Max "
+        f"{_MAX_HARMONY_SPAN} measures per call; page a long aria with several calls."
     )
     inputs = {
         "record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."},
@@ -229,56 +278,78 @@ class DidoneHarmonyTool(Tool):
         if b < a:
             a, b = b, a
         if b - a > _MAX_HARMONY_SPAN:
-            return (f"Range too wide ({b - a} measures). Ask for at most "
-                    f"{_MAX_HARMONY_SPAN} measures at a time.")
+            return _dump({"error": f"range too wide ({b - a} measures); ask for at most "
+                                   f"{_MAX_HARMONY_SPAN} measures per call"})
         df = _load("harmony_events")
-        df = df[(df["record_id"] == str(record_id).strip())
-                & (pd.to_numeric(df["measure_number"], errors="coerce") >= a)
-                & (pd.to_numeric(df["measure_number"], errors="coerce") <= b)]
+        mnum = pd.to_numeric(df["measure_number"], errors="coerce")
+        df = df[(df["record_id"] == str(record_id).strip()) & (mnum >= a) & (mnum <= b)]
         if df.empty:
-            return f"No harmony events for record_id {record_id!r} in mm. {a}-{b}."
-        cols = ["measure_number", "beat", "normalized_label", "local_function",
-                "tonal_region", "is_secondary_dominant", "applied_to", "inversion",
-                "quality_or_chord_type", "phrase_start", "phrase_end", "is_region_marker"]
-        return f"mm. {a}-{b}, {len(df)} chord events:\n{_fmt_table(df, cols)}"
+            return _dump({"error": f"no harmony events for record_id {record_id!r} in mm. {a}-{b}"})
+        chords = []
+        for _, r in df.iterrows():
+            chords.append({
+                "measure": _clean(r["measure_number"]),
+                "beat": _clean(r["beat"]),
+                "label": _clean(r["normalized_label"]),
+                "function": _clean(r["local_function"]),
+                "tonal_region": _clean(r["tonal_region"]),
+                "secondary_dominant_of": _clean(r["applied_to"]) if _clean(r["is_secondary_dominant"]) else None,
+                "inversion": _clean(r["inversion"]),
+                "quality": _clean(r["quality_or_chord_type"]),
+                "phrase_start": bool(_clean(r["phrase_start"])),
+                "phrase_end": bool(_clean(r["phrase_end"])),
+            })
+        return _dump({
+            "record_id": str(record_id).strip(),
+            "from_measure": a, "to_measure": b, "n_events": len(chords),
+            "chords": chords,
+        })
 
 
 class DidoneSectionTonalPlanTool(Tool):
     name = "get_section_tonal_plan"
     description = (
         "Get the formal sections of one aria aligned with their local tonal "
-        "plans: the written formal plan and the performed (post-repeat) plan, "
-        "then per section -- symbol (R1, A1, B1, ...), section type "
-        "(ritornello/text), measure span, the section's own tonal plan, and its "
-        "dominant tonal region. Use this for questions about strophic/formal "
-        "structure and where the tonal plan repeats (da capo detection)."
+        "plans. Returns a JSON object {record_id, written_plan, performed_plan, "
+        "sections:[{index, symbol, type, measures, section_tonal_plan, "
+        "dominant_region}]}. Read the JSON directly. Use this for questions about "
+        "strophic/formal structure and where the tonal plan repeats (da capo)."
     )
     inputs = {"record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."}}
     output_type = "string"
 
     def forward(self, record_id: str) -> str:
         df = _load("section_tonal_plan")
-        df = df[df["record_id"] == str(record_id).strip()]
+        df = df[df["record_id"] == str(record_id).strip()].sort_values("section_index")
         if df.empty:
-            return f"No section tonal plan for record_id {record_id!r}."
+            return _dump({"error": f"no section tonal plan for record_id {record_id!r}"})
         r0 = df.iloc[0]
-        head = (f"written_plan: {r0['written_plan']}\n"
-                f"performed_plan: {r0['performed_plan']}")
-        cols = ["section_index", "section_symbol", "section_type",
-                "section_start_measure", "section_end_measure",
-                "section_tonal_plan", "dominant_tonal_region", "tonal_region_count"]
-        return f"{head}\n\nsections:\n{_fmt_table(df.sort_values('section_index'), cols)}"
+        sections = []
+        for _, r in df.iterrows():
+            sections.append({
+                "index": _clean(r["section_index"]),
+                "symbol": _clean(r["section_symbol"]),
+                "type": _clean(r["section_type"]),
+                "measures": f"{_clean(r['section_start_measure'])}-{_clean(r['section_end_measure'])}",
+                "section_tonal_plan": _clean(r["section_tonal_plan"]),
+                "dominant_region": _clean(r["dominant_tonal_region"]),
+            })
+        return _dump({
+            "record_id": str(record_id).strip(),
+            "written_plan": _clean(r0["written_plan"]),
+            "performed_plan": _clean(r0["performed_plan"]),
+            "sections": sections,
+        })
 
 
 class DidoneTextStructureTool(Tool):
     name = "get_text_structure"
     description = (
-        "Get the textual/strophic structure of one aria: the written formal "
-        "plan, the repeat scheme (D.C./D.S./none), the performed plan, and the "
-        "list of text sections with a preview of the sung words and their "
-        "measure spans. Use this for questions about strophic form and text "
-        "setting. Note: the actual full libretto is in get_aria_metadata's "
-        "corpus only via vocal_text; this tool gives the section-level structure."
+        "Get the textual/strophic structure of one aria. Returns a JSON object "
+        "{record_id, written_plan, repeat_scheme, performed_plan, "
+        "text_confidence, sections:[{index, symbol, type, measures, "
+        "text_preview}]}. Read the JSON directly. Use this for questions about "
+        "strophic form and text setting."
     )
     inputs = {"record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."}}
     output_type = "string"
@@ -286,18 +357,26 @@ class DidoneTextStructureTool(Tool):
     def forward(self, record_id: str) -> str:
         ov = _row("textual_plan_overview", record_id)
         sec = _load("textual_plan_sections")
-        sec = sec[sec["record_id"] == str(record_id).strip()]
+        sec = sec[sec["record_id"] == str(record_id).strip()].sort_values("section_index")
         if ov is None and sec.empty:
-            return f"No textual structure for record_id {record_id!r}."
-        head = (f"written_plan: {ov['written_plan']}\n"
-                f"repeat_scheme: {ov['repeat_scheme']}\n"
-                f"performed_plan: {ov['performed_plan']}\n"
-                f"text_confidence_status: {ov['text_confidence_status']}") if ov is not None else "(overview row missing)"
-        if sec.empty:
-            return head + "\n(no section list)"
-        cols = ["section_index", "symbol", "section_type", "start_measure",
-                "end_measure", "text_preview"]
-        return f"{head}\n\nsections:\n{_fmt_table(sec.sort_values('section_index'), cols)}"
+            return _dump({"error": f"no textual structure for record_id {record_id!r}"})
+        sections = []
+        for _, r in sec.iterrows():
+            sections.append({
+                "index": _clean(r["section_index"]),
+                "symbol": _clean(r["symbol"]),
+                "type": _clean(r["section_type"]),
+                "measures": f"{_clean(r['start_measure'])}-{_clean(r['end_measure'])}",
+                "text_preview": _clean(r["text_preview"]),
+            })
+        return _dump({
+            "record_id": str(record_id).strip(),
+            "written_plan": _clean(ov["written_plan"]) if ov is not None else None,
+            "repeat_scheme": _clean(ov["repeat_scheme"]) if ov is not None else None,
+            "performed_plan": _clean(ov["performed_plan"]) if ov is not None else None,
+            "text_confidence": _clean(ov["text_confidence_status"]) if ov is not None else None,
+            "sections": sections,
+        })
 
 
 _MAX_BATCH = 80
@@ -312,9 +391,9 @@ class DidoneTonalPlansBatchTool(Tool):
     description = (
         "Get the tonal-plan string and opening key for MANY arias at once, given "
         "a list of record_ids. Use this after search_didone_corpus to compare an "
-        "aria against a sample of its peers (same decade, same composer, same "
-        "text) without one call per aria. Returns CSV: record_id, composer, year, "
-        "initial_key, tonal_plan. Max 80 ids."
+        "aria against a sample of its peers. Returns a JSON object "
+        "{n, arias:[{record_id, composer, year, initial_key, tonal_plan}], "
+        "missing:[...]}. Read the JSON directly. Max 80 ids."
     )
     inputs = {"record_ids": {"type": "string", "description": "record_ids separated by commas or spaces, e.g. '0001, 0012, 0041'."}}
     output_type = "string"
@@ -322,31 +401,33 @@ class DidoneTonalPlansBatchTool(Tool):
     def forward(self, record_ids: str) -> str:
         ids = _parse_ids(record_ids)[:_MAX_BATCH]
         if not ids:
-            return "No record_ids given."
+            return _dump({"error": "no record_ids given"})
         ov = _load("tonal_plan_overview")
         md = _load("metadata").set_index("record_id")
         sub = ov[ov["record_id"].isin(ids)].copy()
         if sub.empty:
-            return "No tonal plans for any of those record_ids."
+            return _dump({"n": 0, "arias": [], "missing": ids})
         sub["initial_key"] = sub["record_id"].map(md["initial_key"])
         sub["year"] = sub["record_id"].map(md["year_of_composition"])
         cols = ["record_id", "composer_name", "year", "initial_key", "tonal_plan"]
-        missing = [i for i in ids if i not in set(sub["record_id"])]
-        out = _fmt_table(sub, cols)
-        if missing:
-            out += f"\n(no data for: {', '.join(missing)})"
-        return out
+        rename = {"composer_name": "composer"}
+        found = set(sub["record_id"])
+        return _dump({
+            "n": len(sub),
+            "arias": _records(sub, cols, rename),
+            "missing": [i for i in ids if i not in found],
+        })
 
 
 class DidoneSectionTonalPlansBatchTool(Tool):
     name = "get_section_tonal_plans"
     description = (
         "Get the per-section tonal plans (R1/A1/B1... with each section's local "
-        "key sequence and measure span) for MANY arias at once, given a list of "
-        "record_ids. Use this to compare formal/tonal design -- e.g. how the B "
-        "section opens -- across a sample of arias. Returns CSV: record_id, "
-        "section_symbol, section_type, start_measure, end_measure, "
-        "section_tonal_plan. Max 80 ids."
+        "key sequence and measure span) for MANY arias at once. Use this to "
+        "compare formal/tonal design -- e.g. how the B section opens -- across a "
+        "sample of arias. Returns a JSON object {n_arias, by_record:{record_id: "
+        "[{symbol, type, measures, section_tonal_plan}]}}. Read the JSON "
+        "directly. Max 80 ids."
     )
     inputs = {"record_ids": {"type": "string", "description": "record_ids separated by commas or spaces."}}
     output_type = "string"
@@ -354,24 +435,30 @@ class DidoneSectionTonalPlansBatchTool(Tool):
     def forward(self, record_ids: str) -> str:
         ids = _parse_ids(record_ids)[:_MAX_BATCH]
         if not ids:
-            return "No record_ids given."
+            return _dump({"error": "no record_ids given"})
         df = _load("section_tonal_plan")
-        sub = df[df["record_id"].isin(ids)]
+        sub = df[df["record_id"].isin(ids)].sort_values(["record_id", "section_index"])
         if sub.empty:
-            return "No section tonal plans for any of those record_ids."
-        cols = ["record_id", "section_symbol", "section_type",
-                "section_start_measure", "section_end_measure", "section_tonal_plan"]
-        return _fmt_table(sub.sort_values(["record_id", "section_index"]), cols)
+            return _dump({"n_arias": 0, "by_record": {}})
+        by_record: dict[str, list] = {}
+        for _, r in sub.iterrows():
+            by_record.setdefault(_clean(r["record_id"]), []).append({
+                "symbol": _clean(r["section_symbol"]),
+                "type": _clean(r["section_type"]),
+                "measures": f"{_clean(r['section_start_measure'])}-{_clean(r['section_end_measure'])}",
+                "section_tonal_plan": _clean(r["section_tonal_plan"]),
+            })
+        return _dump({"n_arias": len(by_record), "by_record": by_record})
 
 
 class DidoneTextStructuresBatchTool(Tool):
     name = "get_text_structures"
     description = (
         "Get the strophic/formal structure (written plan, repeat scheme, "
-        "performed plan) for MANY arias at once, given a list of record_ids. Use "
-        "this to compare an aria's text setting against other arias by the same "
-        "composer. Returns CSV: record_id, aria_name, written_plan, "
-        "repeat_scheme, performed_plan. Max 80 ids."
+        "performed plan) for MANY arias at once. Use this to compare an aria's "
+        "text setting against other arias by the same composer. Returns a JSON "
+        "object {n, arias:[{record_id, aria_name, written_plan, repeat_scheme, "
+        "performed_plan}]}. Read the JSON directly. Max 80 ids."
     )
     inputs = {"record_ids": {"type": "string", "description": "record_ids separated by commas or spaces."}}
     output_type = "string"
@@ -379,13 +466,13 @@ class DidoneTextStructuresBatchTool(Tool):
     def forward(self, record_ids: str) -> str:
         ids = _parse_ids(record_ids)[:_MAX_BATCH]
         if not ids:
-            return "No record_ids given."
+            return _dump({"error": "no record_ids given"})
         df = _load("textual_plan_overview")
         sub = df[df["record_id"].isin(ids)]
         if sub.empty:
-            return "No text structures for any of those record_ids."
+            return _dump({"n": 0, "arias": []})
         cols = ["record_id", "aria_name", "written_plan", "repeat_scheme", "performed_plan"]
-        return _fmt_table(sub, cols)
+        return _dump({"n": len(sub), "arias": _records(sub, cols)})
 
 
 def didone_tools() -> list[Tool]:

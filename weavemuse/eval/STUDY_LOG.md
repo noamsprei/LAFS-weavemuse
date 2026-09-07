@@ -75,9 +75,40 @@ mapping a sub-goal like "compare against contemporaneous arias" onto an actual
 capability is the agent's job and part of what is scored. Test applied: a
 musicologist with no knowledge of the codebase could have written it.
 
+## 7. Colab smoke test (1 task, both variants)
+
+Ran `sw1_modulation__0012` on an A100 with the 14B backbone. Pipeline worked end
+to end: correct routing to `musicology_analysis_agent`, both variants finished.
+But the analysis quality was poor in both conditions, for a fixable reason: the
+tools returned CSV-ish text blobs and the agent kept trying to `str.split(',')`
+them, mis-indexed, and once even reported the CSV header row ("region_label") as
+a key area.
+
+Fixes applied:
+- **All Didone tools now return JSON**, not text tables. Tool descriptions say
+  "read the JSON directly; do not string-split". `get_tonal_plan` surfaces
+  `home_key` and a per-segment `closes_on` (the cadential evidence).
+- **Both prompt variants** gained a shared operational line: results are JSON,
+  parse with `json.loads`, don't string-split, don't redo a sub-agent's work.
+  (Operational, not musicological -- kept identical in both so it doesn't
+  confound the intervention.)
+- **Expert prompt** modulation paragraph now points at the section-by-section
+  closing function as cadence evidence and notes the da capo restatement is a
+  return, not a new modulation -- still names no tools.
+
+Known, not yet addressed: the managed-agent "### 1/2/3" response template
+induces some hallucinated padding in section 3. It is constant across both
+conditions so it does not confound the comparison; left alone for now.
+
+Also observed: 7B backbone is below the usable floor (hallucinated `import
+requests` to fetch a fake corpus URL). 14B on A100 routes correctly; 32B may be
+worth trying for cleaner tool-use code.
+
 ## Open items
 
+- Re-run the smoke task with the JSON tools + updated prompts; confirm cleaner
+  traces before the core sweep.
 - Extend the LLM judge to score against per-question expectations (the `metadata`
   in each task is preserved but not yet read by `judge.py`).
-- Run the sweep on the GPU box; hand-grade ~5 final answers to calibrate the judge.
+- Hand-grade ~5 final answers to calibrate the judge.
 - `scripts/summarize_eval.py` to pivot judge scores to task × variant × criterion.
