@@ -88,7 +88,9 @@ def build_manager_agent(model, variant: PromptVariant, cfg: RunConfig) -> CodeAg
         instructions=variant.instructions,
         add_base_tools=True,
         max_steps=cfg.max_steps,
-        additional_authorized_imports=[],
+        # the prompts tell the agent tool results are JSON to parse; give it json
+        # (+ the light stdlib the sub-agent already has, for aggregating results)
+        additional_authorized_imports=["json", "math", "statistics", "collections", "re"],
         return_full_result=True,
     )
 
