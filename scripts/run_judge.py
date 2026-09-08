@@ -167,7 +167,14 @@ def main() -> None:
         if record.get("parse_error"):
             print(f"    ⚠️  parse_error: {record['parse_error']}")
         else:
-            print(f"    scores: { {k: v.get('score') for k, v in record['scores'].items()} }")
+            # Group by each criterion's rubric "group" tag (agentic_flow vs.
+            # musicology) so a glance at stdout separates process quality from
+            # domain-content quality, instead of one flat dict of 10 numbers.
+            by_group: dict[str, dict[str, int | None]] = {}
+            for name, v in record["scores"].items():
+                group = rubric["criteria"].get(name, {}).get("group", "other")
+                by_group.setdefault(group, {})[name] = v.get("score")
+            print(f"    scores: {by_group}")
 
     print(f"\nDone. Scores written under {output_dir}")
 

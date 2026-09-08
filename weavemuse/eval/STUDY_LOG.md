@@ -157,6 +157,56 @@ anything this round:
 - `get_tonal_plan` reference note: flags when metadata home key and the
   tonal-plan opening region disagree (e.g. record 0001).
 
+## 10. Fairness audit of tasks_musicology.jsonl + split judge rubric
+
+Audited what `tasks_musicology.jsonl` actually hands the agent (only
+`EvalTask.query` reaches `agent.run()` -- `metadata` never does, per
+`dataset.py`'s own contract). `initial_key`/`initial_meter`/`decade` are
+metadata-only, confirmed never leaked into query text. `record_id`/
+`aria_name`/`composer`/`year` do appear in query text, and are legitimate for
+7 of the 9 templates (needed either to disambiguate the aria or as the literal
+axis of comparison the question asks about). Real risk found in
+`sw3_style` (galant vs. Baroque) and `sw5_affect` (stormy vs. pastoral):
+composer name + exact year are strong period-style proxies that a model could
+answer from parametric/textbook knowledge about that composer's reputation,
+never touching `get_harmony`/`get_tonal_plan`/`get_section_tonal_plan` --
+defeating the study's own premise that this inference is what's being
+measured. Decision: don't redact the dataset (composer/year are otherwise
+harmless and the corpus-naming problem isn't fixable by redaction anyway);
+close it on the judge side instead.
+
+Rubric (`rubrics/default.json`) restructured v1 -> v2: split from 4 flat
+criteria into 10, each tagged `"group": "agentic_flow"` or `"musicology"`.
+New agentic_flow: `decomposition_adherence` (did the agent visibly work
+through the sub-steps the question calls for, not jump to a conclusion) and
+`evidence_grounding` (is every concrete musical claim traceable to a tool
+result actually seen in this trace, or does it rest on outside/parametric
+knowledge -- the direct fix for the sw3/sw5 finding above). New musicology:
+`definitional_correctness` (applies the question's own stated rule, e.g. the
+confirmed-modulation/cadence-classification rules, not a naive substitute),
+`evidence_sufficiency` (comparative mw* questions must retrieve a real sample,
+not assert from one aria), `musical_accuracy` (domain content correctness,
+split out of the old overloaded `task_success`), and
+`stylistic_reasoning_quality` (sw3/sw5: verdict must rest on concrete features
+of *this* aria, not composer/period reputation -- the other half of the sw3/sw5
+fix). `task_success` narrowed to completeness/framing only.
+
+`judge.py` changes to support this: (1) fixed a real gap where
+`score_trace_file()` rebuilt `EvalTask` without `category`, so
+`build_judge_prompt()` never knew which of the 9 templates it was grading;
+(2) added `_CATEGORY_TO_PARAGRAPHS`, injecting the matching technical-
+definition paragraph (reused verbatim from `variants_musicology.json`'s
+`"expert"` variant text) into the judge prompt per category; (3) fixed a
+second real bug where the prompt's example response JSON was hand-written to
+the original 4 criterion names, silently missing anything added to the rubric
+since -- now generated from `rubric["criteria"].keys()`; (4) criteria now
+render under "Agentic-flow" / "Musicology" headers in the prompt.
+`scripts/run_judge.py`'s stdout summary grouped the same way.
+
+Kept as a single rubric file / single judge call (not two rubrics or two
+passes) -- the grouping is for readability and later slicing of
+`scores/**/*.judge.json`, not a change to the scoring pipeline's shape.
+
 ## Open items
 
 - Re-run the smoke (smoke4) and confirm the sub-agent now calls tools first.
