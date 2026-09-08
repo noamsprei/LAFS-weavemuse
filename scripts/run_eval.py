@@ -86,7 +86,9 @@ def parse_args() -> argparse.Namespace:
                               "a small local model despite its name (~1GB observed). 'hybrid': "
                               "also load the large local music tools -- only if your dataset "
                               "specifically needs them; compounds VRAM pressure further.")
-    parser.add_argument("--max-steps", type=int, default=5)
+    parser.add_argument("--max-steps", type=int, default=8,
+                         help="Step budget applied to BOTH the manager agent and the "
+                              "musicology sub-agent.")
     parser.add_argument("--max-new-tokens", type=int, default=4096,
                          help="Per-generation output cap for the shared backbone. "
                               "1536 was too low: a musicology sub-agent step that "

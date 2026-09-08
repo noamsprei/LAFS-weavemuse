@@ -12,22 +12,30 @@ import os
 import warnings
 
 
-def _parse_error_circuit_breaker(limit: int = 2):
-    """A smolagents step_callback that aborts a run after `limit` *consecutive*
-    code-parse failures.
+def _parse_error_circuit_breaker(limit: int = 2, window: int = 4):
+    """A smolagents step_callback that aborts a run once `limit` code-parse
+    failures land within any `window` consecutive steps.
 
     Observed failure mode on a weak local backbone (Qwen2.5-Coder-14B, 4-bit):
     the agent gathers its tool data, then emits an oversized code block that is
     truncated at the model's output-token cap, so the closing fence is missing;
     smolagents records an AgentParsingError and re-prompts; the model
     regenerates the same too-long block; repeat until max_steps (~20 min of
-    wasted GPU per stuck pair). This breaks that loop in ~3 steps -- the eval
-    runner catches the RuntimeError and records the pair as an error, and the
-    sweep moves on.
+    wasted GPU per stuck pair). The eval runner catches the RuntimeError raised
+    here, records the pair as an error, and the sweep moves on.
+
+    Counting over a window rather than consecutively is load-bearing. Observed
+    on record_id 0041: parse error -> get_harmony(1, 144) rejected for the
+    40-measure cap -> paginated refetch -> parse error -> ... A successful (but
+    useless) step sits between every pair of failures, so a consecutive-only
+    counter resets to 0 every time and the run still grinds to max_steps -- it
+    burned all 12. 2-within-4 trips on that cycle at step 8 while still
+    tolerating an isolated hiccup that the agent recovers from on its own.
     """
-    state = {"streak": 0}
+    state = {"step": 0, "failures": []}
 
     def _cb(memory_step, agent=None):
+        state["step"] += 1
         err = getattr(memory_step, "error", None)
         text = "" if err is None else str(err)
         is_parse_error = err is not None and (
@@ -36,12 +44,54 @@ def _parse_error_circuit_breaker(limit: int = 2):
             or "regex pattern" in text
             or "Make sure to provide correct code" in text
         )
-        state["streak"] = state["streak"] + 1 if is_parse_error else 0
-        if state["streak"] >= limit:
+        if not is_parse_error:
+            return
+        state["failures"].append(state["step"])
+        recent = [s for s in state["failures"] if state["step"] - s < window]
+        state["failures"] = recent
+        if len(recent) >= limit:
             raise RuntimeError(
-                f"musicology_analysis_agent aborted: {state['streak']} consecutive "
-                f"code-parse failures (model stuck emitting unparseable code blocks)"
+                f"musicology_analysis_agent aborted: {len(recent)} code-parse "
+                f"failures within {window} steps (at steps {recent}) -- model "
+                f"stuck emitting unparseable code blocks"
             )
+
+    return _cb
+
+
+def _observation_size_cap(max_chars: int = 16000):
+    """A smolagents step_callback that truncates an over-long step observation
+    before it is replayed into the next prompt.
+
+    smolagents rebuilds the whole conversation from `memory.steps` on every
+    call, so one oversized observation is re-sent on every subsequent step. The
+    agent reaches this by concatenating its own paged tool results and printing
+    them: `print(json.dumps(combined_harmony_data, indent=2))` over a whole
+    aria is ~130k chars (~35k tokens), which alone blows past
+    Qwen2.5-Coder-14B's 32768-token window. Past that limit RoPE positions are
+    outside the trained range and the model degenerates into replaying earlier
+    text verbatim -- which is what produces the parse-error loop above, so this
+    cap is the upstream fix and the circuit breaker is the backstop.
+
+    16000 chars is deliberately just above one full 40-measure `get_harmony`
+    page (~14k chars): a legitimate paged walk passes through untouched, while
+    a whole-aria dump gets cut. The replacement text tells the model what
+    happened so it can page instead of retrying the same print.
+    """
+
+    def _cb(memory_step, agent=None):
+        try:
+            obs = getattr(memory_step, "observations", None)
+            if isinstance(obs, str) and len(obs) > max_chars:
+                memory_step.observations = (
+                    obs[:max_chars]
+                    + f"\n\n[... truncated: observation was {len(obs)} chars, "
+                    f"capped at {max_chars}. Do not print whole-aria dumps -- "
+                    f"work one get_harmony page at a time, or print only the "
+                    f"fields you need (e.g. measure, function, tonal_region).]"
+                )
+        except AttributeError:
+            pass
 
     return _cb
 
@@ -117,7 +167,7 @@ def create_audio_generation_agent(model, device_map="auto", output_dir="/tmp/sta
     return audio_generation_agent
 
 
-def create_musicology_agent(model, data_dir=None):
+def create_musicology_agent(model, data_dir=None, max_steps: int = 8):
     """Build the Didone musicology-analysis agent, or return None if the corpus
     data isn't available.
 
@@ -176,14 +226,21 @@ def create_musicology_agent(model, data_dir=None):
             "dict or list. Keep each code block short."
         ),
         additional_authorized_imports=["statistics", "collections", "json", "re", "math"],
-        max_steps=12,  # multi-work + paged get_harmony walks; the circuit breaker
-                       # below handles the stuck-in-a-parse-loop case much sooner
+        # Caller-controlled (eval sweeps pass RunConfig.max_steps) so --max-steps
+        # governs the sub-agent too, not just the manager. It used to be
+        # hardcoded to 12, which silently ignored --max-steps and let a stuck
+        # pair burn all 12 steps; the circuit breaker below is the other half
+        # of that fix.
+        max_steps=max_steps,
     )
     # Abort a run after 2 consecutive code-parse failures instead of grinding to
     # max_steps. Attached post-construction (not via the step_callbacks kwarg) so
     # a smolagents version that doesn't expose it just silently skips this.
+    # The size cap is registered first so an over-long observation is trimmed
+    # in the same step that produced it, before it can ever be replayed.
     try:
-        agent.step_callbacks.append(_parse_error_circuit_breaker(limit=2))
+        agent.step_callbacks.append(_observation_size_cap(max_chars=16000))
+        agent.step_callbacks.append(_parse_error_circuit_breaker(limit=2, window=4))
     except AttributeError:
         pass
     # Replace smolagents' default managed-agent task wrapper. The stock version
@@ -217,7 +274,8 @@ def create_musicology_agent(model, data_dir=None):
     return agent
 
 
-def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output_dir="/tmp/notagen_output", stable_audio_output_dir="/tmp/stable_audio", tool_mode="hybrid", include_musicology_agent=True, exclude_agents=None):
+def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output_dir="/tmp/notagen_output", stable_audio_output_dir="/tmp/stable_audio", tool_mode="hybrid", include_musicology_agent=True, exclude_agents=None,
+                                 musicology_max_steps=8):
     """
     Returns all WeaveMuse agents and tools as a list for easy access and management.
 
@@ -261,7 +319,7 @@ def get_weavemuse_agents_and_tools(model=None, device_map="auto", notagen_output
     if "web_search_agent" not in excluded:
         agents.append(create_web_agent(model))
     if include_musicology_agent and "musicology_analysis_agent" not in excluded:
-        musicology_agent = create_musicology_agent(model)
+        musicology_agent = create_musicology_agent(model, max_steps=musicology_max_steps)
         if musicology_agent is not None:
             agents.append(musicology_agent)
     return agents, tools

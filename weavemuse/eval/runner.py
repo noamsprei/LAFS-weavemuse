@@ -44,7 +44,7 @@ class RunConfig:
     run_id: str
     tool_mode: str = "remote"
     device_map: str = "auto"
-    max_steps: int = 5
+    max_steps: int = 8
     max_new_tokens: int = 4096  # 1536 truncated sub-agent code blocks -> parse-error loops
     model_id: str = ""
     task_ids: list[str] | None = None
@@ -143,6 +143,9 @@ def build_manager_agent(model, variant: PromptVariant, cfg: RunConfig) -> CodeAg
         device_map=cfg.device_map,
         tool_mode=cfg.tool_mode,
         exclude_agents=cfg.exclude_agents,
+        # the sub-agent gets the same step budget as the manager -- without this
+        # it keeps its own hardcoded default and --max-steps is a half-measure
+        musicology_max_steps=cfg.max_steps,
     )
     return CodeAgent(
         tools=weavemuse_tools,
