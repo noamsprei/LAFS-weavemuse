@@ -157,8 +157,66 @@ anything this round:
 - `get_tonal_plan` reference note: flags when metadata home key and the
   tonal-plan opening region disagree (e.g. record 0001).
 
+## 10. Intervention moved from the manager prompt into the question (per-template)
+
+The `expert` manager-prompt prefix (section 6) was a weak lever: one fixed
+block covering all nine question types, prepended to every task, so on any
+single question 8/9 of it was irrelevant. The smoke tests showed no expert
+benefit. Reworked the design so the domain intervention is **per question
+type, carried in the query**, not in the manager's system prompt.
+
+- **`data/eval/expert_prompts_musicology.json`** (new) -- `{question_template
+  -> decomposition block}` plus a shared `_shared` evidence-first preamble.
+  Each block gives the musicological concepts and how to decompose that
+  question type. Names no tool and no sub-agent -- concept-to-capability
+  mapping stays the agent's job and part of what is scored (same principle as
+  section 6, relocated). Writable by a musicologist with no knowledge of the
+  system.
+- **`weavemuse/eval/variants.py`** -- `PromptVariant` gained `query_mode`
+  (`"base"` | `"expert"`). `"expert"` appends `_shared` + the block for the
+  task's `category` to the query at run time (`runner._compose_query`).
+- **`data/eval/variants_musicology.json`** -- `default` and `expert` now carry
+  **identical `instructions`** (the operational block only) and differ solely
+  in `query_mode`. The manager prompt is no longer a variable, so it cannot
+  confound the comparison.
+- **`scripts/build_musicology_tasks.py`** -- the old `Q` table split into
+  `Q_BASE` (-> dataset `query`) and `Q_EXPERT` (-> expert-prompts file).
+  Regenerates both artifacts.
+- **`scripts/run_eval.py`** -- `--expert-prompts` flag; auto-detects
+  `data/eval/expert_prompts_musicology.json`. `run_sweep` refuses to start if
+  a variant is `query_mode="expert"` but no expert-prompts file loaded.
+- Traces now record `base_query` (verbatim task query), `query` (what the
+  agent received: base + block in expert mode), and `query_mode`.
+
+**Split rule (what goes in base vs expert).** For the four templates with a
+computed reference answer (sw1, sw2, sw4, mw1) the base query keeps the
+*definition of the target concept* (what counts as a confirmed modulation, the
+four cadence terms, what marks an A/B section, that "typical" means a
+distribution) so the reference and the agent's answer are judged on the same
+criterion in both conditions. The expert block then adds *only the method* --
+how to go about finding it. For the open style/affect/comparison templates
+(sw3, sw5, mw2, mw3, mw4) there is no computed reference to mismatch against,
+so the base stays loose and the expert block supplies the feature bundles /
+decomposition.
+
+**Confounder controls.** Only musicological content differs between conditions:
+identical `instructions`, identical deliverables asked for, same 56 tasks /
+same arias, same backbone. The one non-obvious risk this manages is
+grading-target drift -- stripping a concept definition from the base question
+would make the `default` agent look wrong for using a different (reasonable)
+definition rather than for weaker reasoning.
+
+**Judge -- not yet updated.** `judge.py` still labels `variant_instructions`
+as "what varies across the study"; that line is now stale (the query varies,
+not the instructions) and blinding (show the judge `base_query` only) is a
+deliberate open decision. Deferred to the judging pass; traces already carry
+`base_query` so no re-run is needed for it.
+
 ## Open items
 
+- Run the first full 56×2 sweep under the new per-question design (Colab A100).
+- Update `judge.py` for the new design: relabel the "what varies" line; decide
+  whether the judge sees `base_query` (condition-blind) or the composed query.
 - Re-run the smoke (smoke4) and confirm the sub-agent now calls tools first.
 - If 14B still fabricates: a pre-quantized 32B (AWQ, ~19GB) or accept it as a
   finding about the harness floor (Colab can't host a bigger un-quantized model).
@@ -175,9 +233,13 @@ below the usable floor (fabricated tool use); 32B did not fit Colab disk -- so
 analysis agents only (`musicology_analysis_agent`, `chat_musician`, web search);
 generative/audio agents excluded because no task needs them.
 
-**Method.** Same 56 questions under two manager prompts -- `default` (stock) vs
-`expert` (musicological concept definitions + decomposition framing, naming no
-tools). Traces captured, scored by an LLM judge (Claude Haiku remote) on a
+**Method.** Same 56 questions under two conditions that differ only in the
+question text (the manager prompt is held identical): `default` (bare question
++ concept definitions needed for grading + deliverables) vs `expert` (the same,
+plus a per-question-type musicological decomposition -- how an expert breaks
+the question down and what counts as evidence -- naming no tool or sub-agent).
+See section 10 for why the intervention moved from the manager prompt into the
+question. Traces captured, scored by an LLM judge (Claude Haiku remote) on a
 4-criterion rubric. For SW1/SW2/SW4/MW1, the judge is given a reference answer
 computed directly from the Didone data (`build_references.py`); SW3/SW5/MW2/MW3
 are human-graded on a calibration sample.

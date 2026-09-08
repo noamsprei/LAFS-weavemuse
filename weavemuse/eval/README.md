@@ -126,13 +126,26 @@ needed):
     "your_variant_name": {"instructions": "...", "description": "..."}
   }
   ```
-  **Important**: `instructions` is what you're actually varying — it's woven
-  directly into the manager agent's own system prompt (see
-  `weavemuse/eval/variants.py`'s module docstring for why this, and not
-  `description`, is the correct lever). If your study is instead about
-  varying `description` for a specific *sub-agent* (not the top-level
-  manager), that's a different, deeper change not covered by this harness as
-  built — ask before assuming it's a trivial extension.
+  **Important**: `instructions` is one of two levers. It's woven directly into
+  the manager agent's own system prompt (see `weavemuse/eval/variants.py`'s
+  module docstring for why this, and not `description`, is the correct lever).
+  If your study is instead about varying `description` for a specific
+  *sub-agent* (not the top-level manager), that's a different, deeper change
+  not covered by this harness as built — ask before assuming it's a trivial
+  extension.
+
+  The second lever is **`query_mode`** (`"base"` default, or `"expert"`). An
+  `"expert"` variant leaves `instructions` alone and instead appends a
+  per-question-template block to each task's query at run time, from the file
+  passed via `run_eval.py --expert-prompts` (auto-detected:
+  `data/eval/expert_prompts_musicology.json`). That file is
+  `{question_template -> block}` (the template is the task's `category`) plus
+  an optional `"_shared"` preamble prepended to every block. This keeps a
+  domain intervention *in the question, per question type* rather than in one
+  fixed manager-prompt prefix — the musicology study (`STUDY_LOG.md` §10) uses
+  it with `default`/`expert` carrying identical `instructions` and differing
+  only in `query_mode`. Each trace records `base_query`, the composed `query`,
+  and `query_mode`.
 
 - **`weavemuse/eval/rubrics/default.json`** → the judge's scoring criteria.
   Edit `criteria` freely (add/remove/reword) — `judge.py`'s

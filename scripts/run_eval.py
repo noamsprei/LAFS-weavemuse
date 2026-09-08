@@ -44,6 +44,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET = REPO_ROOT / "data" / "eval" / "tasks_smoke.jsonl"
 DEFAULT_VARIANTS = REPO_ROOT / "data" / "eval" / "variants_smoke.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "eval"
+# Default expert-prompts file for the musicology study. Only consumed by
+# variants whose query_mode is "expert"; harmless (unused) otherwise.
+DEFAULT_EXPERT_PROMPTS = REPO_ROOT / "data" / "eval" / "expert_prompts_musicology.json"
 
 
 def _require_env(var_name: str) -> None:
@@ -67,6 +70,12 @@ def parse_args() -> argparse.Namespace:
                          help=f"JSONL task file (default: {DEFAULT_DATASET}).")
     parser.add_argument("--variants", type=Path, default=DEFAULT_VARIANTS,
                          help=f"JSON prompt-variants file (default: {DEFAULT_VARIANTS}).")
+    parser.add_argument("--expert-prompts", type=Path, default=None,
+                         help="JSON file of {question_template -> decomposition block} "
+                              "(+ optional '_shared' preamble), appended to the query for "
+                              "variants with query_mode='expert'. Default: "
+                              f"{DEFAULT_EXPERT_PROMPTS} when it exists, else none. Pass "
+                              "explicitly to use a different file; unused by base-only sweeps.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR,
                          help=f"Directory to write outputs/eval/<run_id>/ into (default: {DEFAULT_OUTPUT_DIR}).")
     parser.add_argument("--run-id", required=True,
@@ -144,9 +153,15 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
     )
 
+    expert_prompts_path = args.expert_prompts
+    if expert_prompts_path is None and DEFAULT_EXPERT_PROMPTS.is_file():
+        expert_prompts_path = DEFAULT_EXPERT_PROMPTS
+        print(f"Expert prompts: {expert_prompts_path} (auto-detected default).")
+
     cfg = RunConfig(
         dataset_path=args.dataset,
         variants_path=args.variants,
+        expert_prompts_path=expert_prompts_path,
         output_dir=args.output_dir,
         run_id=args.run_id,
         tool_mode=args.tool_mode,
