@@ -1,0 +1,36 @@
+{
+  "version": "v2",
+  "criteria": {
+    "tool_selection_correctness": {
+      "group": "agentic_flow",
+      "description": "Did the agent choose the right tool(s)/sub-agent for the task -- e.g. musicology_analysis_agent's search_didone_corpus/get_aria_metadata/get_tonal_plan/get_harmony/get_section_tonal_plan/get_text_structure (or their batch variants) for Didone-corpus questions, not a hallucinated or wrong tool -- with correctly-formed arguments (valid record_id, get_harmony spans of at most 40 measures, etc.)?",
+      "scale": "0 (never called a valid tool / consistently wrong choice) to 5 (always the right tool, correctly invoked)"
+    },
+    "reasoning_coherence": {
+      "group": "agentic_flow",
+      "description": "Are the 'Thought:' steps coherent, non-repetitive, and do they build on prior steps rather than restating them?",
+      "scale": "0 (incoherent or looping/repeating itself) to 5 (clear, concise, progresses logically)"
+    },
+    "decomposition_adherence": {
+      "group": "agentic_flow",
+      "description": "Did the agent break the question into the sub-steps it calls for -- whether spelled out explicitly in the query/instructions or implied by the question type (e.g. for a modulation question: establish the home key, walk the tonal-plan segments, check the cadential evidence for each, only then conclude) -- rather than jumping straight to a final answer in one leap?",
+      "scale": "0 (answered in one leap with no visible decomposition) to 5 (clearly worked through each required sub-step before concluding)"
+    },
+    "task_success": {
+      "group": "agentic_flow",
+      "description": "Does the final answer address the literal question asked, completely and in the shape requested (e.g. an ordered list of key areas plus a count, not just a count; a classification of every cadence found, not just a total)? Judge completeness/framing here -- judge whether the musical content itself is correct under musical_accuracy instead.",
+      "scale": "0 (no relevant answer / failed) to 5 (fully and completely addresses what was asked)"
+    },
+    "efficiency": {
+      "group": "agentic_flow",
+      "description": "Did the agent reach a final answer in a reasonable number of steps/tokens, without unnecessary repetition or wasted tool calls? Judge this alongside the objective step_count/total_tokens numbers already in the trace, not from the text alone. Multiple get_harmony calls to page through a long aria (max 40 measures/call) are expected, not wasteful.",
+      "scale": "0 (hit max_steps without finishing, or wildly wasteful) to 5 (direct, minimal steps to a correct answer)"
+    },
+    "evidence_grounding": {
+      "group": "agentic_flow",
+      "description": "Is every concrete musical claim in the final answer (a key, a chord label, a cadence, a measure number, a section symbol) traceable to something an actual tool call returned in this trace, rather than asserted from general/parametric knowledge about the composer/period or invented outright? A style or period verdict that never calls get_harmony/get_tonal_plan/get_section_tonal_plan but still reaches a confident conclusion should score low here even if that conclusion happens to be correct.",
+      "scale": "0 (claims are invented or rest on unretrieved outside knowledge) to 5 (every claim traces to a tool result actually seen in this trace)"
+    }
+  },
+  "notes": "v2: agentic_flow criteria only (tool use, process, efficiency) for the Didone-corpus musicology study. Added decomposition_adherence and evidence_grounding; evidence_grounding exists specifically to catch a model asserting keys/cadences/measures from composer/period stereotype instead of the retrieved score evidence -- a real leakage risk identified in the fairness audit of tasks_musicology.jsonl (composer name + exact year appear in those queries' text). The musicology group (definitional_correctness, evidence_sufficiency, musical_accuracy, stylistic_reasoning_quality) has been removed, so domain correctness of the musical content is no longer scored here; only the agent's process is. Edit criteria/scale wording freely per weavemuse/eval/README.md; score_trace_file()'s contract (rubric in, {criterion: {score, rationale}} out) is what's load-bearing."
+}

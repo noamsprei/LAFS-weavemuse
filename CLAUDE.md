@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## How to respond
+
+Answer one step at a time. Do one thing, show the result, stop, and wait. Do not
+chain multiple steps or pre-empt the next question. Be concise: no preamble, no
+recap, no unsolicited alternatives or "you could also" lists. If a question is
+simple, answer it in a sentence or two. Expand only when asked.
+
 ## What this is
 
 WeaveMuse is a multi-agent music AI framework built on `smolagents` (Hugging Face's agent
@@ -96,7 +103,11 @@ higher-level class the CLI launches, which interactively prompts the user for a 
 tier/mode (local / HF-cloud / all-remote) before constructing agents —
 `weavemuse/interfaces/terminal_interface.py` is the terminal-only equivalent. `app.py` is a
 third, more direct entrypoint (mainly for `gradio` dev hot-reload) that builds the manager agent
-inline rather than going through `WeaveMuseGUI`.
+inline rather than going through `WeaveMuseGUI`. All three build the manager agent directly with
+`CodeAgent` + `get_weavemuse_agents_and_tools()`; `weavemuse/agents/music_agent.py::MusicAgent` is
+a separate, self-contained agent builder that `WeaveMuseInterface` accepts (it takes any
+`MultiStepAgent`) but that none of the shipped entrypoints currently instantiate — don't assume
+it's on the live path when tracing agent construction.
 
 ### NotaGen submodule
 

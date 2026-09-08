@@ -22,6 +22,7 @@ except ImportError:
     sf = None
 
 from gradio_client import Client, handle_file
+from gradio_client.exceptions import AppError
 from smolagents.tools import Tool
 
 logger = logging.getLogger(__name__)
@@ -112,13 +113,33 @@ class AudioFlamingoTool(Tool):
             # Call the Gradio client directly with the file path
             # handle_file() will handle the file upload to the remote space
             result = self.client.predict(
-                audio_file=handle_file(audio_file),
+                audio_path=handle_file(audio_file),
                 prompt_text=query.strip(),
-                api_name="/single_turn_infer"
+                api_name="/infer"
             )
             
             return str(result)
-            
+
+        except AppError as e:
+            # The remote Space's own backend raised an unhandled exception
+            # while processing the request -- confirmed (2026-09) to happen
+            # for every input regardless of file/query, so it's a bug or
+            # capacity issue in manoskary/music-flamingo itself, not
+            # something this call can fix. gradio_client's own message ends
+            # with "...set show_error=True in launch()" -- advice for the
+            # SPACE'S OWN AUTHOR to enable verbose server-side logging, not
+            # an argument this tool (or its caller) can pass. Echoing that
+            # raw text caused the calling agent to repeatedly retry with a
+            # nonexistent show_error=True kwarg, burning steps on a dead
+            # end -- return a message that doesn't dangle that bait.
+            logger.error(f"Audio Flamingo Space raised an internal error: {e}")
+            return (
+                "Error: the remote Audio Flamingo service failed while processing "
+                "this request (an internal error on the Space's own backend, not "
+                "with this file or query -- retrying the same call will not help). "
+                "Try the Audio Analysis tool instead, or retry later."
+            )
+
         except Exception as e:
             logger.error(f"Error in AudioFlamingoTool.forward: {e}")
             return f"Error analyzing audio: {str(e)}"
