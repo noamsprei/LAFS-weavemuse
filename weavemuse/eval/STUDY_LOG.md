@@ -157,7 +157,57 @@ anything this round:
 - `get_tonal_plan` reference note: flags when metadata home key and the
   tonal-plan opening region disagree (e.g. record 0001).
 
-## 10. Intervention moved from the manager prompt into the question (per-template)
+## 10. Fairness audit of tasks_musicology.jsonl + split judge rubric
+
+Audited what `tasks_musicology.jsonl` actually hands the agent (only
+`EvalTask.query` reaches `agent.run()` -- `metadata` never does, per
+`dataset.py`'s own contract). `initial_key`/`initial_meter`/`decade` are
+metadata-only, confirmed never leaked into query text. `record_id`/
+`aria_name`/`composer`/`year` do appear in query text, and are legitimate for
+7 of the 9 templates (needed either to disambiguate the aria or as the literal
+axis of comparison the question asks about). Real risk found in
+`sw3_style` (galant vs. Baroque) and `sw5_affect` (stormy vs. pastoral):
+composer name + exact year are strong period-style proxies that a model could
+answer from parametric/textbook knowledge about that composer's reputation,
+never touching `get_harmony`/`get_tonal_plan`/`get_section_tonal_plan` --
+defeating the study's own premise that this inference is what's being
+measured. Decision: don't redact the dataset (composer/year are otherwise
+harmless and the corpus-naming problem isn't fixable by redaction anyway);
+close it on the judge side instead.
+
+Rubric (`rubrics/default.json`) restructured v1 -> v2: split from 4 flat
+criteria into 10, each tagged `"group": "agentic_flow"` or `"musicology"`.
+New agentic_flow: `decomposition_adherence` (did the agent visibly work
+through the sub-steps the question calls for, not jump to a conclusion) and
+`evidence_grounding` (is every concrete musical claim traceable to a tool
+result actually seen in this trace, or does it rest on outside/parametric
+knowledge -- the direct fix for the sw3/sw5 finding above). New musicology:
+`definitional_correctness` (applies the question's own stated rule, e.g. the
+confirmed-modulation/cadence-classification rules, not a naive substitute),
+`evidence_sufficiency` (comparative mw* questions must retrieve a real sample,
+not assert from one aria), `musical_accuracy` (domain content correctness,
+split out of the old overloaded `task_success`), and
+`stylistic_reasoning_quality` (sw3/sw5: verdict must rest on concrete features
+of *this* aria, not composer/period reputation -- the other half of the sw3/sw5
+fix). `task_success` narrowed to completeness/framing only.
+
+`judge.py` changes to support this: (1) fixed a real gap where
+`score_trace_file()` rebuilt `EvalTask` without `category`, so
+`build_judge_prompt()` never knew which of the 9 templates it was grading;
+(2) added `_CATEGORY_TO_PARAGRAPHS`, injecting the matching technical-
+definition paragraph (reused verbatim from `variants_musicology.json`'s
+`"expert"` variant text) into the judge prompt per category; (3) fixed a
+second real bug where the prompt's example response JSON was hand-written to
+the original 4 criterion names, silently missing anything added to the rubric
+since -- now generated from `rubric["criteria"].keys()`; (4) criteria now
+render under "Agentic-flow" / "Musicology" headers in the prompt.
+`scripts/run_judge.py`'s stdout summary grouped the same way.
+
+Kept as a single rubric file / single judge call (not two rubrics or two
+passes) -- the grouping is for readability and later slicing of
+`scores/**/*.judge.json`, not a change to the scoring pipeline's shape.
+
+## 11. Intervention moved from the manager prompt into the question (per-template)
 
 The `expert` manager-prompt prefix (section 6) was a weak lever: one fixed
 block covering all nine question types, prepended to every task, so on any
@@ -214,17 +264,26 @@ not having expertise, not a harness bug; the judge rubric should credit a
 defensible answer rather than exact number-matching. The five open templates
 (sw3/sw5/mw2/mw3/mw4) have no computed reference and are unaffected.
 
-**Judge -- not yet updated.** `judge.py` still labels `variant_instructions`
-as "what varies across the study"; that line is now stale (the query varies,
-not the instructions) and blinding (show the judge `base_query` only) is a
-deliberate open decision. Deferred to the judging pass; traces already carry
-`base_query` so no re-run is needed for it.
+**Judge -- needs reconciling with section 10.** The rubric v2 and `judge.py`
+changes in section 10 were written against the *earlier* design (musicological
+framing carried in the manager `expert` prompt). Under this redesign the
+`default` condition gets a *naive* question with no stated rule, so section
+10's `definitional_correctness` criterion and its per-category "hold the trace
+to these definitions" injection would penalise every `default` answer for not
+following a rule it was never given. `judge.py`'s `_CATEGORY_PARAGRAPHS` are
+also the old long definitions, not the new method blocks. Reconcile before the
+next `run_judge.py` run: make the definitional criteria condition-aware (or
+judge `default` on defensible reasoning), refresh the paragraphs, and decide
+whether the judge sees `base_query` or the composed `query`. Trace generation
+is unaffected -- this only blocks judging.
 
 ## Open items
 
 - Run the first full 56×2 sweep under the new per-question design (Colab A100).
-- Update `judge.py` for the new design: relabel the "what varies" line; decide
-  whether the judge sees `base_query` (condition-blind) or the composed query.
+- Reconcile the section 10 judge rubric v2 + `judge.py` with the section 11
+  per-question design *before* any `run_judge.py` run (see section 11's judge
+  note): condition-aware definitional criteria, refreshed category paragraphs,
+  and base_query-vs-composed-query blinding.
 - Re-run the smoke (smoke4) and confirm the sub-agent now calls tools first.
 - If 14B still fabricates: a pre-quantized 32B (AWQ, ~19GB) or accept it as a
   finding about the harness floor (Colab can't host a bigger un-quantized model).
@@ -246,13 +305,15 @@ question text (the manager prompt is held identical): `default` = the naive
 question a non-specialist would ask; `expert` = that same question plus a
 per-question-type block giving the musicological concepts and the analytical
 procedure a specialist would apply, naming no tool or sub-agent. Designed
-template by template with a musicologist. See section 10 for why the
+template by template with a musicologist. See section 11 for why the
 intervention moved from the manager prompt into the question, and the accepted
 limitation on grading the computed-reference templates. Traces captured,
-scored by an LLM judge (Claude Haiku remote) on a 4-criterion rubric. For
-SW1/SW2/SW4/MW1, the judge is given a reference answer computed directly from
-the Didone data (`build_references.py`); SW3/SW5/MW2/MW3 are human-graded on a
-calibration sample.
+scored by an LLM judge (Claude Haiku remote) on the grouped agentic-flow /
+musicology rubric (section 10) -- which still needs reconciling with the
+per-question design before a judged run. For SW1/SW2/SW4/MW1, the judge is
+given a reference answer computed directly from the Didone data
+(`build_references.py`); SW3/SW5/MW2/MW3 are human-graded on a calibration
+sample.
 
 **Design choices that affect validity.**
 - Tools return evidence (tonal plans, chord tables, section structure), never

@@ -149,8 +149,26 @@ needed):
 
 - **`weavemuse/eval/rubrics/default.json`** → the judge's scoring criteria.
   Edit `criteria` freely (add/remove/reword) — `judge.py`'s
-  `score_trace_file()` reads whatever criteria are in the file you pass via
-  `--rubric`, nothing is hardcoded to the four starting criteria.
+  `build_judge_prompt()` builds both the criteria list and the example
+  response JSON from whatever's in the file you pass via `--rubric`, nothing
+  is hardcoded to specific criterion names. Each criterion also carries a
+  `"group"` tag (`"agentic_flow"` — tool use, decomposition, efficiency — or
+  `"musicology"` — domain-specific correctness for the Didone-corpus study);
+  the judge prompt renders the two groups under separate headers, and
+  `scripts/run_judge.py`'s stdout summary is grouped the same way. This is a
+  single rubric/single judge call either way — the grouping is for readability
+  and later slicing of `scores/**/*.judge.json`, not two separate passes.
+
+- **Category-specific technical definitions**: for the musicology study,
+  `judge.py`'s `_CATEGORY_TO_PARAGRAPHS` maps each task's `category` (e.g.
+  `sw1_modulation`, `sw3_style`) to the relevant technical-definition
+  paragraph(s) (the modulation/cadence rule, the galant-vs-Baroque feature
+  bundle, etc. — the same text used in `data/eval/variants_musicology.json`'s
+  `"expert"` prompt variant), and injects the matching paragraph into the
+  judge prompt so the judge checks the trace against the actual rule for that
+  question type instead of guessing. This requires `score_trace_file()` to be
+  given `tasks_by_id` (i.e. run with `--dataset`) — without it, `task.category`
+  is `None` and no definition paragraph is injected.
 
 - **`weavemuse/eval/judge.py`'s `build_judge_prompt()`** → if you want the
   judge to weigh things differently (e.g. ask for a single overall score
