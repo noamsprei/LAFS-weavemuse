@@ -87,7 +87,13 @@ def parse_args() -> argparse.Namespace:
                               "also load the large local music tools -- only if your dataset "
                               "specifically needs them; compounds VRAM pressure further.")
     parser.add_argument("--max-steps", type=int, default=5)
-    parser.add_argument("--max-new-tokens", type=int, default=1536)
+    parser.add_argument("--max-new-tokens", type=int, default=4096,
+                         help="Per-generation output cap for the shared backbone. "
+                              "1536 was too low: a musicology sub-agent step that "
+                              "emits a real analysis loop (or an over-long tool-data "
+                              "recap) gets truncated mid-code-block, which smolagents "
+                              "reads as a parse error and retries -- a loop. 4096 "
+                              "gives a step room to finish.")
     parser.add_argument("--overwrite", action="store_true",
                          help="Redo (task, variant) pairs whose trace JSON already exists "
                               "under --output-dir/--run-id. Default: resume -- existing "
