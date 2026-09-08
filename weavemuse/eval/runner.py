@@ -51,6 +51,9 @@ class RunConfig:
     variant_ids: list[str] | None = None
     exclude_agents: list[str] | None = None
     overwrite: bool = False  # redo (task, variant) pairs whose trace already exists
+    # JSON file of {question_template -> method block}. Consumed only by
+    # variants with query_mode="expert"; None disables expert-query composition.
+    expert_prompts_path: Path | None = None
 
     def run_dir(self) -> Path:
         return self.output_dir / self.run_id
@@ -76,6 +79,7 @@ def _manifest_row(cfg: RunConfig, rec: dict, reused: bool) -> dict:
     return {
         "task_id": rec["task_id"],
         "variant_id": rec["variant_id"],
+        "query_mode": rec.get("query_mode"),
         "state": rec["state"],
         "reused": reused,
         "total_tokens": (rec.get("token_usage") or {}).get("total_tokens"),
@@ -97,10 +101,42 @@ def _git_commit() -> str | None:
         return None
 
 
+def load_expert_prompts(path: Path | None) -> dict[str, str]:
+    """Load the {question_template -> method block} JSON. Returns {} when path
+    is None or the file is absent, so a dataset with no expert prompts still
+    runs (expert-mode variants then just fall back to the base query, with a
+    per-pair warning from _compose_query)."""
+    if path is None or not Path(path).is_file():
+        return {}
+    with Path(path).open("r", encoding="utf-8") as f:
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: expected a JSON object of template -> block string")
+    return {k: v for k, v in raw.items()}
+
+
+def _compose_query(task: EvalTask, variant: PromptVariant, expert_prompts: dict[str, str]) -> str:
+    """The effective query for one (task, variant) pair. query_mode="base" (or
+    an expert-mode variant with no matching block) returns the task's query
+    verbatim; query_mode="expert" appends the method block keyed by the task's
+    `category` (its question template)."""
+    if variant.query_mode != "expert":
+        return task.query
+    block = expert_prompts.get(task.category or "")
+    if not block:
+        print(f"    ⚠️  variant {variant.variant_id!r} is query_mode=expert but no "
+              f"expert block for category {task.category!r} -- sending base query "
+              f"(this makes it identical to the base condition for this task).")
+        return task.query
+    return task.query + "\n\n" + block
+
+
 def build_manager_agent(model, variant: PromptVariant, cfg: RunConfig) -> CodeAgent:
-    """Build one fresh manager CodeAgent, with `instructions=variant.instructions`
-    as the only thing that varies across the study -- mirrors
-    scripts/quickstart_local.py's manager-agent construction otherwise.
+    """Build one fresh manager CodeAgent with `instructions=variant.instructions`
+    -- mirrors scripts/quickstart_local.py's manager-agent construction
+    otherwise. For the musicology study `instructions` is held identical across
+    variants and the intervention rides in the query instead (variant.query_mode
+    / _compose_query); older studies vary `instructions` here.
     """
     weavemuse_agents, weavemuse_tools = get_weavemuse_agents_and_tools(
         model=model,
@@ -124,7 +160,13 @@ def build_manager_agent(model, variant: PromptVariant, cfg: RunConfig) -> CodeAg
     )
 
 
-def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> dict:
+def run_one(
+    model,
+    task: EvalTask,
+    variant: PromptVariant,
+    cfg: RunConfig,
+    expert_prompts: dict[str, str] | None = None,
+) -> dict:
     """Run one (task, variant) pair and write its trace JSON. Returns the
     same record dict that gets written to disk, for manifest bookkeeping.
 
@@ -137,6 +179,7 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
     manifest.json.
     """
     free_vram_before = get_free_vram_gb()
+    effective_query = _compose_query(task, variant, expert_prompts or {})
 
     agent = None
     result = None
@@ -158,7 +201,7 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
         # still holds every call recorded even if agent.run() itself raises.
         with traced_run(agent) as ledger:
             result = agent.run(
-                task.query, reset=True, additional_args=task.attachments or None
+                effective_query, reset=True, additional_args=task.attachments or None
             )
     except Exception as e:
         error_text = f"{type(e).__name__}: {e}"
@@ -186,7 +229,13 @@ def run_one(model, task: EvalTask, variant: PromptVariant, cfg: RunConfig) -> di
         "task_id": task.task_id,
         "variant_id": variant.variant_id,
         "variant_instructions": variant.instructions,
-        "query": task.query,
+        "query_mode": variant.query_mode,
+        # `query` is what the agent actually received (base + expert block when
+        # query_mode=expert); `base_query` is the task's query verbatim, so a
+        # judge can be shown the base question regardless of condition.
+        "query": effective_query,
+        "base_query": task.query,
+        "question_template": task.category,
         "attachments": task.attachments,
         "run_config": {
             "tool_mode": cfg.tool_mode,
@@ -224,6 +273,7 @@ def run_sweep(model, cfg: RunConfig) -> None:
     """
     tasks = load_tasks(cfg.dataset_path)
     variants = load_variants(cfg.variants_path)
+    expert_prompts = load_expert_prompts(cfg.expert_prompts_path)
 
     if cfg.task_ids:
         wanted = set(cfg.task_ids)
@@ -238,6 +288,21 @@ def run_sweep(model, cfg: RunConfig) -> None:
             raise ValueError(f"--variant-ids not found in variants file: {sorted(missing_v)}")
         variants = {vid: v for vid, v in variants.items() if vid in wanted_v}
 
+    # Validate expert-query wiring against the variants/tasks actually selected.
+    if any(v.query_mode == "expert" for v in variants.values()):
+        if not expert_prompts:
+            raise ValueError(
+                f"a selected variant uses query_mode='expert' but no expert-prompts "
+                f"file was loaded (expert_prompts_path={cfg.expert_prompts_path!r}). "
+                f"Pass --expert-prompts pointing at a template->block JSON file."
+            )
+        templates = {k for k in expert_prompts if not k.startswith("_")}
+        missing_blocks = {t.category for t in tasks if t.category} - templates
+        if missing_blocks:
+            print(f"⚠️  expert-prompts file has no block for these question "
+                  f"templates: {sorted(missing_blocks)} -- expert runs for those "
+                  f"tasks will fall back to the base query.")
+
     cfg.run_dir().mkdir(parents=True, exist_ok=True)
     manifest_path = cfg.run_dir() / "manifest.json"
 
@@ -245,6 +310,8 @@ def run_sweep(model, cfg: RunConfig) -> None:
         "run_id": cfg.run_id,
         "dataset_path": str(cfg.dataset_path),
         "variants_path": str(cfg.variants_path),
+        "expert_prompts_path": str(cfg.expert_prompts_path) if cfg.expert_prompts_path else None,
+        "query_modes": {vid: v.query_mode for vid, v in variants.items()},
         "tool_mode": cfg.tool_mode,
         "max_steps": cfg.max_steps,
         "max_new_tokens": cfg.max_new_tokens,
@@ -283,7 +350,7 @@ def run_sweep(model, cfg: RunConfig) -> None:
 
             n_run += 1
             print(f"[{i}/{total}] task={task.task_id} variant={variant.variant_id} ...")
-            record = run_one(model, task, variant, cfg)  # writes its trace to disk
+            record = run_one(model, task, variant, cfg, expert_prompts)  # writes its trace to disk
             manifest["runs"].append(_manifest_row(cfg, record, reused=False))
             _flush_manifest()  # checkpoint after every pair -- a crash keeps all prior work
             print(f"    state={record['state']} "

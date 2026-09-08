@@ -207,8 +207,83 @@ Kept as a single rubric file / single judge call (not two rubrics or two
 passes) -- the grouping is for readability and later slicing of
 `scores/**/*.judge.json`, not a change to the scoring pipeline's shape.
 
+## 11. Intervention moved from the manager prompt into the question (per-template)
+
+The `expert` manager-prompt prefix (section 6) was a weak lever: one fixed
+block covering all nine question types, prepended to every task, so on any
+single question 8/9 of it was irrelevant. The smoke tests showed no expert
+benefit. Reworked the design so the domain intervention is **per question
+type, carried in the query**, not in the manager's system prompt.
+
+- **`data/eval/expert_prompts_musicology.json`** (new) -- `{question_template
+  -> method block}`. Each block gives the musicological concepts and the
+  procedure for that question type, and nothing else -- it does not restate or
+  re-scope the question, and names no tool and no sub-agent (choosing which
+  capability to use, and whether to look up harmonic/structural data, is the
+  agent's call and part of what is scored). Writable by a musicologist with no
+  knowledge of the system.
+- **`weavemuse/eval/variants.py`** -- `PromptVariant` gained `query_mode`
+  (`"base"` | `"expert"`). `"expert"` appends the block for the task's
+  `category` to the query verbatim (`runner._compose_query`:
+  `query + "\n\n" + block`).
+- **`data/eval/variants_musicology.json`** -- `default` and `expert` now carry
+  **identical `instructions`** (the operational block only) and differ solely
+  in `query_mode`. The manager prompt is no longer a variable, so it cannot
+  confound the comparison.
+- **`scripts/build_musicology_tasks.py`** -- the old `Q` table split into
+  `Q_BASE` (-> dataset `query`) and `Q_EXPERT` (-> expert-prompts file).
+  Regenerates both artifacts.
+- **`scripts/run_eval.py`** -- `--expert-prompts` flag; auto-detects
+  `data/eval/expert_prompts_musicology.json`. `run_sweep` refuses to start if
+  a variant is `query_mode="expert"` but no expert-prompts file loaded.
+- Traces now record `base_query` (verbatim task query), `query` (what the
+  agent received: base + block in expert mode), and `query_mode`.
+
+**Split rule (what goes in base vs expert).** `default` = the naive question a
+non-specialist would ask: no concept definitions, no procedure (e.g. "does it
+modulate? if so, how many times, and to which keys?"). `expert` = that exact
+question + a block giving the musicological concepts and the analytical
+procedure a specialist would apply (e.g. "work through the harmonic events,
+look for cadences that pivot from one key to another, determine the new key at
+each, count the distinct tonal areas"). Designed template by template with a
+musicologist; see the per-template entries in `build_musicology_tasks.py`.
+
+**Confounder controls.** Between conditions, the question sentence is
+byte-identical; the manager `instructions` are byte-identical; same 56 tasks,
+same arias, same backbone. The expert block adds only musicological method --
+no operational/formatting guidance (that lives in the shared `instructions`),
+no capability names, no restatement of the question.
+
+**Accepted limitation -- grading the four computed-reference templates.** For
+sw1/sw2/sw4/mw1 the judge compares against a reference computed under a fixed
+criterion (`build_references.py`: e.g. sw1 counts only cadence-confirmed key
+changes). The `default` question does not state that criterion -- a naive user
+would not -- so a `default` answer that counts under a looser but defensible
+reading will diverge from the reference. This is treated as a real effect of
+not having expertise, not a harness bug; the judge rubric should credit a
+defensible answer rather than exact number-matching. The five open templates
+(sw3/sw5/mw2/mw3/mw4) have no computed reference and are unaffected.
+
+**Judge -- needs reconciling with section 10.** The rubric v2 and `judge.py`
+changes in section 10 were written against the *earlier* design (musicological
+framing carried in the manager `expert` prompt). Under this redesign the
+`default` condition gets a *naive* question with no stated rule, so section
+10's `definitional_correctness` criterion and its per-category "hold the trace
+to these definitions" injection would penalise every `default` answer for not
+following a rule it was never given. `judge.py`'s `_CATEGORY_PARAGRAPHS` are
+also the old long definitions, not the new method blocks. Reconcile before the
+next `run_judge.py` run: make the definitional criteria condition-aware (or
+judge `default` on defensible reasoning), refresh the paragraphs, and decide
+whether the judge sees `base_query` or the composed `query`. Trace generation
+is unaffected -- this only blocks judging.
+
 ## Open items
 
+- Run the first full 56×2 sweep under the new per-question design (Colab A100).
+- Reconcile the section 10 judge rubric v2 + `judge.py` with the section 11
+  per-question design *before* any `run_judge.py` run (see section 11's judge
+  note): condition-aware definitional criteria, refreshed category paragraphs,
+  and base_query-vs-composed-query blinding.
 - Re-run the smoke (smoke4) and confirm the sub-agent now calls tools first.
 - If 14B still fabricates: a pre-quantized 32B (AWQ, ~19GB) or accept it as a
   finding about the harness floor (Colab can't host a bigger un-quantized model).
@@ -225,12 +300,20 @@ below the usable floor (fabricated tool use); 32B did not fit Colab disk -- so
 analysis agents only (`musicology_analysis_agent`, `chat_musician`, web search);
 generative/audio agents excluded because no task needs them.
 
-**Method.** Same 56 questions under two manager prompts -- `default` (stock) vs
-`expert` (musicological concept definitions + decomposition framing, naming no
-tools). Traces captured, scored by an LLM judge (Claude Haiku remote) on a
-4-criterion rubric. For SW1/SW2/SW4/MW1, the judge is given a reference answer
-computed directly from the Didone data (`build_references.py`); SW3/SW5/MW2/MW3
-are human-graded on a calibration sample.
+**Method.** Same 56 questions under two conditions that differ only in the
+question text (the manager prompt is held identical): `default` = the naive
+question a non-specialist would ask; `expert` = that same question plus a
+per-question-type block giving the musicological concepts and the analytical
+procedure a specialist would apply, naming no tool or sub-agent. Designed
+template by template with a musicologist. See section 11 for why the
+intervention moved from the manager prompt into the question, and the accepted
+limitation on grading the computed-reference templates. Traces captured,
+scored by an LLM judge (Claude Haiku remote) on the grouped agentic-flow /
+musicology rubric (section 10) -- which still needs reconciling with the
+per-question design before a judged run. For SW1/SW2/SW4/MW1, the judge is
+given a reference answer computed directly from the Didone data
+(`build_references.py`); SW3/SW5/MW2/MW3 are human-graded on a calibration
+sample.
 
 **Design choices that affect validity.**
 - Tools return evidence (tonal plans, chord tables, section structure), never

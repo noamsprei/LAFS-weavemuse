@@ -6,6 +6,14 @@ reasoning: it gets woven into that agent's system prompt template as
 `custom_instructions` (see smolagents.agents.CodeAgent.initialize_system_prompt).
 `description` only affects how a *parent* agent's prompt describes this agent
 as a callable tool -- irrelevant here since the manager is the top-level agent.
+
+`query_mode` is the second lever, added for the musicology study: instead of
+(or as well as) varying `instructions`, a variant can select how the per-task
+query is built. "base" sends the task's `query` as-is; "expert" appends the
+per-question-template decomposition block from an expert-prompts file (see
+runner.py::_compose_query and data/eval/expert_prompts_musicology.json). This
+keeps the domain intervention in the question, per-question-type, rather than
+in a single fixed manager-prompt prefix.
 """
 
 from __future__ import annotations
@@ -17,18 +25,29 @@ from pathlib import Path
 DEFAULT_VARIANT_ID = "default"
 
 
+QUERY_MODES = ("base", "expert")
+
+
 @dataclass
 class PromptVariant:
     variant_id: str
     instructions: str
     description: str = ""
+    query_mode: str = "base"
 
     @classmethod
     def from_dict(cls, variant_id: str, d: dict) -> "PromptVariant":
+        query_mode = d.get("query_mode", "base")
+        if query_mode not in QUERY_MODES:
+            raise ValueError(
+                f"variant {variant_id!r}: query_mode must be one of {QUERY_MODES}, "
+                f"got {query_mode!r}"
+            )
         return cls(
             variant_id=variant_id,
             instructions=d["instructions"],
             description=d.get("description", ""),
+            query_mode=query_mode,
         )
 
 
