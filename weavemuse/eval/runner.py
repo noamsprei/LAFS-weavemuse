@@ -50,12 +50,40 @@ class RunConfig:
     task_ids: list[str] | None = None
     variant_ids: list[str] | None = None
     exclude_agents: list[str] | None = None
+    overwrite: bool = False  # redo (task, variant) pairs whose trace already exists
 
     def run_dir(self) -> Path:
         return self.output_dir / self.run_id
 
     def trace_path(self, task_id: str, variant_id: str) -> Path:
         return self.run_dir() / "traces" / task_id / f"{variant_id}.json"
+
+
+def _completed_trace(path: Path) -> dict | None:
+    """Return a previously-written trace if it exists and parses (a resume
+    checkpoint), else None so the pair is (re)run."""
+    if not path.is_file():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            rec = json.load(f)
+        return rec if rec.get("state") else None
+    except (json.JSONDecodeError, OSError):
+        return None  # partial/corrupt write -> rerun
+
+
+def _manifest_row(cfg: RunConfig, rec: dict, reused: bool) -> dict:
+    return {
+        "task_id": rec["task_id"],
+        "variant_id": rec["variant_id"],
+        "state": rec["state"],
+        "reused": reused,
+        "total_tokens": (rec.get("token_usage") or {}).get("total_tokens"),
+        "duration": (rec.get("timing") or {}).get("duration"),
+        "error": rec.get("error"),
+        "free_vram_gb_after": rec.get("free_vram_gb_after"),
+        "trace_path": str(cfg.trace_path(rec["task_id"], rec["variant_id"])),
+    }
 
 
 def _git_commit() -> str | None:
@@ -211,6 +239,7 @@ def run_sweep(model, cfg: RunConfig) -> None:
         variants = {vid: v for vid, v in variants.items() if vid in wanted_v}
 
     cfg.run_dir().mkdir(parents=True, exist_ok=True)
+    manifest_path = cfg.run_dir() / "manifest.json"
 
     manifest = {
         "run_id": cfg.run_id,
@@ -221,6 +250,7 @@ def run_sweep(model, cfg: RunConfig) -> None:
         "max_new_tokens": cfg.max_new_tokens,
         "model_id": cfg.model_id,
         "exclude_agents": cfg.exclude_agents,
+        "overwrite": cfg.overwrite,
         "git_commit": _git_commit(),
         "task_ids": [t.task_id for t in tasks],
         "variant_ids": list(variants.keys()),
@@ -228,29 +258,37 @@ def run_sweep(model, cfg: RunConfig) -> None:
         "runs": [],
     }
 
+    def _flush_manifest() -> None:
+        manifest["updated_at"] = datetime.datetime.now().isoformat()
+        tmp = manifest_path.with_suffix(".json.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, default=str)
+        tmp.replace(manifest_path)  # atomic: a crash mid-write never truncates it
+
     total = len(tasks) * len(variants)
-    i = 0
+    i = n_run = n_reused = 0
     for task in tasks:
         for variant in variants.values():
             i += 1
-            print(f"[{i}/{total}] task={task.task_id} variant={variant.variant_id} ...")
-            record = run_one(model, task, variant, cfg)
-            manifest["runs"].append({
-                "task_id": task.task_id,
-                "variant_id": variant.variant_id,
-                "state": record["state"],
-                "total_tokens": (record["token_usage"] or {}).get("total_tokens"),
-                "duration": (record["timing"] or {}).get("duration"),
-                "error": record["error"],
-                "free_vram_gb_after": record["free_vram_gb_after"],
-                "trace_path": str(cfg.trace_path(task.task_id, variant.variant_id)),
-            })
-            print(
-                f"    state={record['state']} "
-                f"free_vram_after={record['free_vram_gb_after']}"
+            done = None if cfg.overwrite else _completed_trace(
+                cfg.trace_path(task.task_id, variant.variant_id)
             )
+            if done is not None:
+                n_reused += 1
+                print(f"[{i}/{total}] task={task.task_id} variant={variant.variant_id} "
+                      f"-- reusing existing trace (state={done['state']})")
+                manifest["runs"].append(_manifest_row(cfg, done, reused=True))
+                _flush_manifest()
+                continue
+
+            n_run += 1
+            print(f"[{i}/{total}] task={task.task_id} variant={variant.variant_id} ...")
+            record = run_one(model, task, variant, cfg)  # writes its trace to disk
+            manifest["runs"].append(_manifest_row(cfg, record, reused=False))
+            _flush_manifest()  # checkpoint after every pair -- a crash keeps all prior work
+            print(f"    state={record['state']} "
+                  f"free_vram_after={record['free_vram_gb_after']}")
 
     manifest["finished_at"] = datetime.datetime.now().isoformat()
-    with (cfg.run_dir() / "manifest.json").open("w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, default=str)
-    print(f"\nDone. Manifest: {cfg.run_dir() / 'manifest.json'}")
+    _flush_manifest()
+    print(f"\nDone. {n_run} run, {n_reused} reused. Manifest: {manifest_path}")

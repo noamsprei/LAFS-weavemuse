@@ -79,6 +79,10 @@ def parse_args() -> argparse.Namespace:
                               "specifically needs them; compounds VRAM pressure further.")
     parser.add_argument("--max-steps", type=int, default=5)
     parser.add_argument("--max-new-tokens", type=int, default=1536)
+    parser.add_argument("--overwrite", action="store_true",
+                         help="Redo (task, variant) pairs whose trace JSON already exists "
+                              "under --output-dir/--run-id. Default: resume -- existing "
+                              "traces are reused and only missing pairs are run.")
     parser.add_argument("--model-id", default=None,
                          help="Override the GPU-tier-recommended backbone model id "
                               "(e.g. a smaller model on a 16GB Colab T4). Default: auto.")
@@ -153,6 +157,7 @@ def main() -> None:
         task_ids=args.task_ids.split(",") if args.task_ids else None,
         variant_ids=args.variant_ids.split(",") if args.variant_ids else None,
         exclude_agents=args.exclude_agents.split(",") if args.exclude_agents else None,
+        overwrite=args.overwrite,
     )
 
     if args.limit is not None:
