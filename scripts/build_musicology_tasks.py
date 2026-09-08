@@ -4,28 +4,25 @@ frozen 12-aria sample.
 Writes two artifacts, deterministically (edit the tables and rerun):
 
   data/eval/tasks_musicology.jsonl        -- one EvalTask per line, `query`
-                                             built from Q_BASE (the neutral
+                                             built from Q_BASE (the naive
                                              question every condition gets)
-  data/eval/expert_prompts_musicology.json -- {question_template -> decomposition
-                                             block} from Q_EXPERT, plus a
-                                             "_shared" evidence-first preamble
+  data/eval/expert_prompts_musicology.json -- {question_template -> method block}
+                                             from Q_EXPERT
 
 The study's two conditions:
   default -> the task's base query, verbatim.
-  expert  -> base query + "_shared" preamble + the Q_EXPERT block for that
-             question template (appended by weavemuse/eval/runner.py at run
-             time, keyed on the task's `category`).
+  expert  -> base query + the Q_EXPERT block for that question template
+             (appended by weavemuse/eval/runner.py at run time, keyed on the
+             task's `category`).
 
 Split rule (see weavemuse/eval/STUDY_LOG.md):
-  - Q_BASE carries the bare question, the deliverables, and -- for the four
-    templates with a computed reference answer (sw1, sw2, sw4, mw1) -- the
-    definition of the target concept, so the reference and the answer are
-    judged on the same criterion regardless of condition.
-  - Q_EXPERT adds ONLY the analytical decomposition (how a musicologist breaks
-    the question down and what counts as evidence) and, for the open style/
-    affect questions, the relevant feature bundles. It names no tool and no
-    sub-agent -- mapping a concept onto a capability is the agent's job and
-    part of what is scored.
+  - Q_BASE is the naive question a non-specialist would ask -- no concept
+    definitions, no procedure.
+  - Q_EXPERT adds ONLY the analytical method a musicologist would apply to that
+    question type: the relevant concepts and the procedure. It names no tool
+    and no sub-agent -- choosing which capability to use (and whether to look
+    up harmonic/structural data) is the agent's call and part of what is
+    scored.
 
 No gold answers are embedded here -- correctness is judged post hoc (LLM judge
 + a human calibration sample); computed references live in
@@ -44,148 +41,126 @@ EXPERT_OUT = REPO / "data" / "eval" / "expert_prompts_musicology.json"
 
 # base questions ----------------------------------------------------------
 # {ref} is filled with "record_id N (Composer's YEAR setting of 'ARIA')".
-# Every study condition gets exactly this text; the expert condition gets the
-# matching Q_EXPERT block appended.
+# Q_BASE is the naive question a non-specialist would ask. The expert condition
+# gets exactly this text plus the matching Q_EXPERT block (the analytical method
+# a musicologist would apply), appended at run time by runner._compose_query.
 Q_BASE = {
     "sw1_modulation": (
-        "For the Didone-corpus aria {ref}: give its tonal scheme -- the ordered "
-        "sequence of key areas -- and then count the CONFIRMED modulations. Count "
-        "a key area as a confirmed modulation only if the music establishes it "
-        "with its own cadence (a phrase closing with a perfect or half cadence in "
-        "that key); a region of only a few bars that is passed through without a "
-        "cadential close is a tonicisation and does NOT count. The da capo return "
-        "to the opening key is a return, not a new modulation. Report: the ordered "
-        "key areas, which of them are confirmed modulations (with the cadential "
-        "evidence), and the total confirmed count."
+        "For the Didone-corpus aria {ref}: does it modulate? If so, how many "
+        "times, and to which keys?"
     ),
     "sw2_cadences": (
-        "For the Didone-corpus aria {ref}: how many cadences does it contain, and "
-        "are most of them of the same type? A cadence is the harmonic close that "
-        "ends a phrase; classify each by the progression into it -- perfect "
-        "(dominant to tonic), imperfect (a phrase ending on the dominant), "
-        "interrupted (dominant to submediant), or plagal (subdominant to tonic). "
-        "Report the total count, the type of each, and whether one type "
-        "predominates."
+        "For the Didone-corpus aria {ref}: how many times does it come to a "
+        "cadence, and are those cadences mostly alike or varied in kind?"
     ),
     "sw3_style": (
-        "For the Didone-corpus aria {ref}: is it more galant or more Baroque in "
-        "character? Decide which features are relevant, examine them, and weigh "
-        "them."
+        "For the Didone-corpus aria {ref}: would you describe it as more galant "
+        "or more Baroque in style?"
     ),
     "sw4_strophic": (
-        "For the Didone-corpus aria {ref}: infer its strophic structure -- the "
-        "ordered sequence of A and B sections -- from the music alone, without "
-        "access to its sung text. Take an A section to be a statement of the "
-        "opening material in the home key, and a B section to be a contrasting "
-        "passage that is framed away from the tonic. Report the ordered sequence "
-        "and explain the reasoning."
+        "For the Didone-corpus aria {ref}: can you work out its strophic form -- "
+        "the pattern of repeated and contrasting sections -- from the music "
+        "alone, without the sung text?"
     ),
     "sw5_affect": (
-        "For the Didone-corpus aria {ref}: is it stormy (Sturm und Drang) or "
-        "calm and pastoral in character? Decide which features bear on this, "
-        "examine them, and weigh them."
+        "For the Didone-corpus aria {ref}: does it come across as stormy and "
+        "agitated, or calm and pastoral?"
     ),
     "mw1_period_norm": (
-        "For the Didone-corpus aria {ref}: is its tonal scheme typical of arias "
-        "written in the same period? A feature is typical only in relation to a "
-        "body of contemporaneous works, so base the answer on the distribution "
-        "across a representative sample of arias from the same time, not on this "
-        "aria alone. Report the comparison and the judgement."
+        "For the Didone-corpus aria {ref}: is its handling of keys typical of "
+        "arias from the same period, or unusual?"
     ),
     "mw2_bsection_opening": (
-        "For the Didone-corpus aria {ref}: is the chord progression that opens "
-        "its B section common among other settings of the same aria text? "
-        "Compare against the other settings before answering."
+        "For the Didone-corpus aria {ref}: does the music that opens its "
+        "contrasting middle section start with the same harmony as other "
+        "settings of the same text, or does it do something different?"
     ),
     "mw3_composer_textplan": (
-        "For the Didone-corpus aria {ref}: does its strophic/formal plan "
-        "resemble that of other arias by the same composer? Compare against a "
-        "sample of that composer's other arias."
+        "For the Didone-corpus aria {ref}: is the way it's laid out into "
+        "sections similar to how the same composer shapes other arias?"
     ),
     "mw4_year_cohort": (
         "For the Didone-corpus aria {ref}: do most arias composed in the same "
-        "year share similar musical characteristics (key, meter, tempo, form)? "
-        "Compare against the other arias of that year."
+        "year as this one share similar musical characteristics?"
     ),
 }
 
 # expert decomposition blocks ------------------------------------------------
-# Appended (after EXPERT_SHARED) to the base query only in the `expert`
-# condition. Method and evidence only -- no tool or sub-agent is named.
-EXPERT_SHARED = (
-    "Work from specific musical evidence, not general impression. Break the "
-    "question into concrete sub-questions that each have an evidential answer, "
-    "gather that evidence, then reason to a conclusion and state the evidence it "
-    "rests on."
-)
-
+# Appended to the base query in the `expert` condition only. The analytical
+# method a musicologist would apply to that question type -- concepts and
+# procedure, no tool or sub-agent named (choosing which capability to use is
+# the agent's call and part of what is scored).
 Q_EXPERT = {
     "sw1_modulation": (
-        "To work this out: first establish the home key. Then go through the "
-        "tonal design section by section; for each section, the harmonic function "
-        "it closes on is the cadential evidence for whether a new key was "
-        "confirmed there. Count only the confirmed key changes and give the "
-        "ordered sequence of key areas. 'No modulation beyond the dominant' is a "
-        "legitimate finding."
+        "Approach this as a harmonic analysis: work through the aria's harmonic "
+        "events and look for cadences that pivot from one key to another; at each "
+        "such point, determine the new key. Then count the distinct tonal areas "
+        "established this way and answer, listing the keys in order."
     ),
     "sw2_cadences": (
-        "To find the cadences, locate the points of harmonic arrival or repose -- "
-        "where a phrase comes to rest -- and read the chord progression leading "
-        "into each; that progression is the cadence type. Then tally the types "
-        "and see whether one predominates."
+        "A cadence is the harmonic formula that closes a phrase. Work through "
+        "the aria phrase by phrase: at each point of repose, read the "
+        "progression leading into it and classify the cadence -- perfect (V-I), "
+        "imperfect (phrase ending on V), interrupted (V-vi), or plagal (IV-I). "
+        "Then tally the types and see whether one dominates."
     ),
     "sw3_style": (
-        "Galant and Baroque character are bundles of tendencies, not single "
-        "traits. Baroque writing tends toward continuous spinning-out of the "
-        "line, denser counterpoint, motoric and consistent rhythm, and few full "
-        "stops. Galant writing tends toward periodic phrasing with frequent clear "
-        "cadences, lighter melody-and-accompaniment texture, and more sectional "
-        "articulation. First decide which of these features you can actually check "
-        "from the evidence available, then weigh those to decide which pole the "
-        "aria leans toward."
+        "These are bundles of tendencies, not single traits. Baroque style "
+        "leans toward counterpoint, continuous music without strong sectional "
+        "breaks, and often triple metre and minor mode; galant style leans "
+        "toward short balanced phrases with frequent clear cadences, a light "
+        "melody-over-accompaniment texture, and clear sectional articulation. "
+        "Identify which of these features you can actually observe in this aria, "
+        "examine them, and weigh them to place it on the spectrum -- it need not "
+        "be purely one or the other."
     ),
     "sw4_strophic": (
-        "The stanzas of the text usually leave a musical trace. Locate the "
-        "repeats by finding where the opening tonal motion is restated exactly; a "
-        "contrasting passage that begins and ends away from the tonic, sitting "
-        "between such restatements, is the middle strophe."
+        "The text's stanzas usually leave a musical trace: a return to the "
+        "opening material in the home key marks a fresh statement of the main "
+        "strophe (an A section); a passage that begins and stays away from the "
+        "tonic, sitting between two such returns, is the contrasting middle "
+        "strophe (a B section). Find the exact restatements of the opening tonal "
+        "motion to locate the section boundaries, then read off the A/B sequence "
+        "and explain the reasoning."
     ),
     "sw5_affect": (
         "Stormy (Sturm und Drang) writing tends toward fast tempo, minor mode, "
-        "dense and agitated motion, and driving rhythm. Pastoral writing tends "
-        "toward moderate or slow tempo, a lilting compound or triple metre, "
-        "transparent texture, and gentle motion. Decide which of these features "
-        "you can check from the evidence, then weigh them rather than deciding on "
-        "any one alone."
+        "agitated and dense motion, and driving rhythm; pastoral writing tends "
+        "toward a moderate or slow tempo, a lilting compound or triple metre, "
+        "light transparent texture, and gentle motion. Check which of these "
+        "features the aria actually shows, examine them, and weigh them rather "
+        "than judging on any single one."
     ),
     "mw1_period_norm": (
-        "To judge typicality: characterise this aria's tonal scheme -- home key, "
-        "the ordered key areas, whether it stays within closely related keys. "
-        "Assemble the same characterisation for a sample of arias from the same "
-        "period. Compare this aria against that distribution -- common, at the "
-        "edge, or unusual. One aria cannot establish a norm."
+        "\"Typical\" only means something relative to a body of contemporaneous "
+        "works, so judge it from a distribution, not from this aria alone. "
+        "Characterise this aria's tonal scheme -- its home key, the sequence of "
+        "key areas it visits, and whether those stay within closely related "
+        "keys. Build the same characterisation for a representative sample of "
+        "other arias from around the same time, and compare: is this aria's "
+        "scheme common in that sample, at its edge, or an outlier?"
     ),
     "mw2_bsection_opening": (
         "The B section is the contrasting middle of the aria, framed away from "
-        "the home key. Locate where it begins, read the opening chord progression "
-        "there, then obtain the corresponding opening progression for the other "
-        "settings of the same text and compare -- is this opening gesture shared "
-        "across settings or particular to this one?"
+        "the home key. Identify where it begins and read the chord progression "
+        "it opens with. Get the corresponding opening progression from the other "
+        "settings of the same text, and compare -- is this opening gesture "
+        "shared across the settings or particular to this one?"
     ),
     "mw3_composer_textplan": (
-        "A formal plan here is the sequence of sections -- A and B strophes and "
-        "any da capo return -- together with their tonal framing. Describe this "
-        "aria's plan, then the plans of a sample of the same composer's other "
-        "arias, and compare: is this one characteristic of how the composer "
-        "builds an aria, or an outlier?"
+        "Trace the section boundaries from the music: mark where the opening "
+        "material returns in the home key, and where a passage sits away from "
+        "the tonic between two such returns, and note any da capo return. Do the "
+        "same reading for a sample of the same composer's other arias, then "
+        "compare the resulting layouts -- is this one characteristic of the "
+        "composer, or an outlier?"
     ),
     "mw4_year_cohort": (
-        "Collect the stated characteristics -- key, metre, tempo, form -- for "
-        "this aria and for the other arias of the same year, then look at the "
-        "spread of each: is there a dominant key, metre, tempo, or formal type "
-        "that year, and does this aria fall inside it? A shared characteristic is "
-        "a concentration in the distribution, not just two arias that happen to "
-        "match."
+        "Consider the choices that carry period style: the key and whether it "
+        "is major or minor, the metre and its character, the tempo or movement "
+        "type, and the formal type (such as da capo aria). For each, look at "
+        "what the other arias of that year mostly do -- the prevailing "
+        "convention -- and whether this aria follows it or departs from it."
     ),
 }
 
@@ -252,10 +227,8 @@ def main() -> None:
     for k, v in by.items():
         print(f"  {k:24} {v}")
 
-    expert = {"_shared": EXPERT_SHARED, **Q_EXPERT}
-    EXPERT_OUT.write_text(json.dumps(expert, ensure_ascii=False, indent=2) + "\n")
-    print(f"wrote {len(Q_EXPERT)} expert blocks (+ _shared) to "
-          f"{EXPERT_OUT.relative_to(REPO)}")
+    EXPERT_OUT.write_text(json.dumps(dict(Q_EXPERT), ensure_ascii=False, indent=2) + "\n")
+    print(f"wrote {len(Q_EXPERT)} expert blocks to {EXPERT_OUT.relative_to(REPO)}")
 
 
 if __name__ == "__main__":

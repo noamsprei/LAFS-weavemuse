@@ -136,16 +136,16 @@ needed):
 
   The second lever is **`query_mode`** (`"base"` default, or `"expert"`). An
   `"expert"` variant leaves `instructions` alone and instead appends a
-  per-question-template block to each task's query at run time, from the file
-  passed via `run_eval.py --expert-prompts` (auto-detected:
+  per-question-template block to each task's query verbatim at run time
+  (`query + "\n\n" + block`), from the file passed via
+  `run_eval.py --expert-prompts` (auto-detected:
   `data/eval/expert_prompts_musicology.json`). That file is
-  `{question_template -> block}` (the template is the task's `category`) plus
-  an optional `"_shared"` preamble prepended to every block. This keeps a
+  `{question_template -> block}`, keyed on the task's `category`. This keeps a
   domain intervention *in the question, per question type* rather than in one
   fixed manager-prompt prefix — the musicology study (`STUDY_LOG.md` §10) uses
-  it with `default`/`expert` carrying identical `instructions` and differing
-  only in `query_mode`. Each trace records `base_query`, the composed `query`,
-  and `query_mode`.
+  it with `default`/`expert` carrying identical `instructions` and an
+  identical question sentence, differing only in the appended block. Each
+  trace records `base_query`, the composed `query`, and `query_mode`.
 
 - **`weavemuse/eval/rubrics/default.json`** → the judge's scoring criteria.
   Edit `criteria` freely (add/remove/reword) — `judge.py`'s

@@ -51,9 +51,8 @@ class RunConfig:
     variant_ids: list[str] | None = None
     exclude_agents: list[str] | None = None
     overwrite: bool = False  # redo (task, variant) pairs whose trace already exists
-    # JSON file of {question_template -> decomposition block} (+ optional
-    # "_shared" preamble). Consumed only by variants with query_mode="expert";
-    # None disables expert-query composition entirely.
+    # JSON file of {question_template -> method block}. Consumed only by
+    # variants with query_mode="expert"; None disables expert-query composition.
     expert_prompts_path: Path | None = None
 
     def run_dir(self) -> Path:
@@ -103,10 +102,9 @@ def _git_commit() -> str | None:
 
 
 def load_expert_prompts(path: Path | None) -> dict[str, str]:
-    """Load the {question_template -> decomposition block} JSON (+ optional
-    "_shared" preamble prepended to every block). Returns {} when path is None
-    or the file is absent, so a dataset with no expert prompts still runs
-    (expert-mode variants then just fall back to the base query, with a
+    """Load the {question_template -> method block} JSON. Returns {} when path
+    is None or the file is absent, so a dataset with no expert prompts still
+    runs (expert-mode variants then just fall back to the base query, with a
     per-pair warning from _compose_query)."""
     if path is None or not Path(path).is_file():
         return {}
@@ -118,10 +116,10 @@ def load_expert_prompts(path: Path | None) -> dict[str, str]:
 
 
 def _compose_query(task: EvalTask, variant: PromptVariant, expert_prompts: dict[str, str]) -> str:
-    """The effective query for one (task, variant) pair. query_mode="base"
-    (or an expert-mode variant with no matching block) returns the task's
-    query verbatim; query_mode="expert" appends the "_shared" preamble and
-    the block keyed by the task's `category` (its question template)."""
+    """The effective query for one (task, variant) pair. query_mode="base" (or
+    an expert-mode variant with no matching block) returns the task's query
+    verbatim; query_mode="expert" appends the method block keyed by the task's
+    `category` (its question template)."""
     if variant.query_mode != "expert":
         return task.query
     block = expert_prompts.get(task.category or "")
@@ -130,12 +128,7 @@ def _compose_query(task: EvalTask, variant: PromptVariant, expert_prompts: dict[
               f"expert block for category {task.category!r} -- sending base query "
               f"(this makes it identical to the base condition for this task).")
         return task.query
-    preamble = expert_prompts.get("_shared", "")
-    parts = [task.query]
-    if preamble:
-        parts.append(preamble)
-    parts.append(block)
-    return "\n\n".join(parts)
+    return task.query + "\n\n" + block
 
 
 def build_manager_agent(model, variant: PromptVariant, cfg: RunConfig) -> CodeAgent:

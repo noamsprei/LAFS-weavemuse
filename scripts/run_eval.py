@@ -71,11 +71,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--variants", type=Path, default=DEFAULT_VARIANTS,
                          help=f"JSON prompt-variants file (default: {DEFAULT_VARIANTS}).")
     parser.add_argument("--expert-prompts", type=Path, default=None,
-                         help="JSON file of {question_template -> decomposition block} "
-                              "(+ optional '_shared' preamble), appended to the query for "
-                              "variants with query_mode='expert'. Default: "
-                              f"{DEFAULT_EXPERT_PROMPTS} when it exists, else none. Pass "
-                              "explicitly to use a different file; unused by base-only sweeps.")
+                         help="JSON file of {question_template -> method block}, appended "
+                              "verbatim to the query for variants with query_mode='expert'. "
+                              f"Default: {DEFAULT_EXPERT_PROMPTS} when it exists, else none. "
+                              "Pass explicitly to use a different file; unused by base-only "
+                              "sweeps.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR,
                          help=f"Directory to write outputs/eval/<run_id>/ into (default: {DEFAULT_OUTPUT_DIR}).")
     parser.add_argument("--run-id", required=True,
