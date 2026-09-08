@@ -101,15 +101,17 @@ def ref_sw2(rid: str) -> str:
     if tp.get("error"):
         return f"unavailable: {tp['error']}"
     # page get_harmony over the whole aria
-    try:
-        last = max(int(str(s["measures"]).split("-")[-1])
-                   for s in tp["segments"] if str(s["measures"]).split("-")[-1].isdigit())
-    except ValueError:
-        last = 200
+    last = tp.get("total_measures")
+    if not last:
+        try:
+            last = max(int(s["end_measure"]) for s in tp["segments"]
+                       if s.get("end_measure") is not None)
+        except ValueError:
+            last = 200
     chords: list[dict] = []
     m = 1
     while m <= last:
-        hi = min(m + 39, last)
+        hi = min(m + dt._MAX_HARMONY_SPAN - 1, last)
         h = json.loads(_HARM.forward(rid, m, hi))
         if not h.get("error"):
             chords.extend(h["chords"])

@@ -63,7 +63,12 @@ _HARMONY_COLS = [
     "applied_to", "inversion", "quality_or_chord_type", "phrase_start", "phrase_end",
 ]
 
-_MAX_HARMONY_SPAN = 40  # measures per get_harmony call
+# Measures per get_harmony call. Raised 40 -> 100 once the payload was made
+# compact (see _dump) and stripped of its mostly-null columns: 100 measures now
+# costs about what 40 used to, so a typical ~175-measure aria pages in 2 calls
+# instead of 5, and most tonal-plan segments (which routinely run 41-65
+# measures) fit in a single call.
+_MAX_HARMONY_SPAN = 100
 
 
 def _data_dir() -> Path:
@@ -93,6 +98,26 @@ def _row(name: str, record_id: str) -> pd.Series | None:
     df = _load(name)
     hit = df[df["record_id"] == str(record_id).strip()]
     return None if hit.empty else hit.iloc[0]
+
+
+@lru_cache(maxsize=None)
+def _last_measure(record_id: str) -> int | None:
+    """Highest measure number that carries a harmony event for this aria.
+
+    tonal_plan_segments stores the final segment's end_measure as the literal
+    string 'end', so before this there was no numeric last measure anywhere in
+    any tool's output -- agents repeatedly did int('end') and crashed, or fell
+    back to the last segment's *start*. Resolved once here instead.
+    """
+    try:
+        df = _load("harmony_events")
+    except FileNotFoundError:
+        return None
+    m = pd.to_numeric(
+        df.loc[df["record_id"] == str(record_id).strip(), "measure_number"],
+        errors="coerce",
+    ).dropna()
+    return int(m.max()) if not m.empty else None
 
 
 def _clean(v):
@@ -265,15 +290,17 @@ class DidoneTonalPlanTool(Tool):
     name = "get_tonal_plan"
     description = (
         "Get the tonal plan of one aria. Returns a JSON object with: tonal_plan "
-        "(the ordered key-area string), home_key, and segments -- a list where "
-        "each entry gives the measure span, the region as a Roman numeral "
-        "relative to the home key, the absolute key of that region, the harmonic "
-        "function the segment opens and closes on (closes_on is your cadence "
-        "evidence -- whether the segment ends with a cadential close IN that "
-        "region), an annotation boundary_type, and a confidence score. Read the "
-        "JSON directly; do not string-split it. Whether a short region counts as "
-        "a real modulation or just a passing tonicisation is for you to judge "
-        "from its length and closes_on -- the tool does not label that."
+        "(the ordered key-area string), home_key, total_measures (the aria's "
+        "last measure, an integer -- use this to page get_harmony), n_segments, "
+        "and segments -- a list where each entry gives start_measure/end_measure "
+        "as integers, length_measures, the region as a Roman numeral relative to "
+        "the home key, the absolute key of that region, the harmonic function the "
+        "segment opens and closes on (closes_on is your cadence evidence -- "
+        "whether the segment ends with a cadential close IN that region), an "
+        "annotation boundary_type, and a confidence score. Read the JSON "
+        "directly; do not string-split it. Whether a short region counts as a "
+        "real modulation or just a passing tonicisation is for you to judge from "
+        "its length and closes_on -- the tool does not label that."
     )
     inputs = {"record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."}}
     output_type = "string"
@@ -290,17 +317,29 @@ class DidoneTonalPlanTool(Tool):
         if not home_initial and not seg.empty:
             home_initial = _clean(seg.iloc[0]["absolute_key"])
 
+        # The source records the final segment's end_measure as the string
+        # 'end'; resolve it to the aria's real last measure so every segment
+        # has numeric bounds and a usable length.
+        total_measures = _last_measure(record_id)
+
         segments = []
         for _, r in seg.iterrows():
             region = _clean(r["region_label"])
             key = _abs_key(home_initial, region) or _clean(r["absolute_key"])
             try:
-                span = int(_clean(r["end_measure"])) - int(_clean(r["start_measure"]))
+                start = int(_clean(r["start_measure"]))
             except (TypeError, ValueError):
-                span = None
+                start = None
+            try:
+                end = int(_clean(r["end_measure"]))
+            except (TypeError, ValueError):
+                end = total_measures  # 'end' -> real last measure
+            span = (end - start) if (start is not None and end is not None) else None
             segments.append({
                 "segment": _clean(r["segment_index"]),
-                "measures": f"{_clean(r['start_measure'])}-{_clean(r['end_measure'])}",
+                "measures": f"{start}-{end}",
+                "start_measure": start,
+                "end_measure": end,
                 "length_measures": span,
                 "region": region,
                 "key": key,
@@ -314,6 +353,7 @@ class DidoneTonalPlanTool(Tool):
             "record_id": str(record_id).strip(),
             "tonal_plan": _clean(ov["tonal_plan"]) if ov is not None else None,
             "home_key": home_initial or (segments[0]["key"] if segments else None),
+            "total_measures": total_measures,
             "n_segments": len(segments),
             "segments": segments,
         })
@@ -328,13 +368,15 @@ class DidoneHarmonyTool(Tool):
         "phrase_start, phrase_end}]}, where `function` is the Roman numeral "
         "(e.g. 'V65/V', 'I', 'viio'). There is NO cadence label -- infer "
         "cadences yourself from the progression into each phrase_end. Read the "
-        f"JSON directly. Max {_MAX_HARMONY_SPAN} measures per call; page a long "
-        "aria with several calls."
+        f"JSON directly. At most {_MAX_HARMONY_SPAN} measures are returned per "
+        "call: a wider range is CLIPPED, not rejected -- the reply then carries "
+        "truncated:true and next_from_measure, so continue from there to page a "
+        "long aria. get_tonal_plan's total_measures tells you where to stop."
     )
     inputs = {
         "record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."},
         "from_measure": {"type": "integer", "description": "First measure of the range (inclusive)."},
-        "to_measure": {"type": "integer", "description": f"Last measure (inclusive). Must be within {_MAX_HARMONY_SPAN} of from_measure."},
+        "to_measure": {"type": "integer", "description": f"Last measure (inclusive). A span wider than {_MAX_HARMONY_SPAN} measures is clipped to it (see truncated / next_from_measure in the reply)."},
     }
     output_type = "string"
 
@@ -342,9 +384,15 @@ class DidoneHarmonyTool(Tool):
         a, b = int(from_measure), int(to_measure)
         if b < a:
             a, b = b, a
-        if b - a > _MAX_HARMONY_SPAN:
-            return _dump({"error": f"range too wide ({b - a} measures); ask for at most "
-                                   f"{_MAX_HARMONY_SPAN} measures per call"})
+        # Clip rather than reject. Returning a bare {"error": ...} for an
+        # over-wide range was a real failure source: the natural strategy of
+        # fetching harmony per tonal-plan segment errors immediately (segments
+        # routinely run 41-65 measures), and agents then indexed ['chords'] on
+        # the error dict and crashed. Clipping keeps a naive call useful.
+        requested_to = b
+        truncated = (b - a) > _MAX_HARMONY_SPAN
+        if truncated:
+            b = a + _MAX_HARMONY_SPAN
         df = _load("harmony_events")
         mnum = pd.to_numeric(df["measure_number"], errors="coerce")
         df = df[(df["record_id"] == str(record_id).strip()) & (mnum >= a) & (mnum <= b)]
@@ -365,11 +413,16 @@ class DidoneHarmonyTool(Tool):
                 "phrase_start": bool(_clean(r["phrase_start"])),
                 "phrase_end": bool(_clean(r["phrase_end"])),
             })
-        return _dump({
+        out = {
             "record_id": str(record_id).strip(),
             "from_measure": a, "to_measure": b, "n_events": len(chords),
             "chords": chords,
-        })
+        }
+        if truncated:
+            out["truncated"] = True
+            out["requested_to_measure"] = requested_to
+            out["next_from_measure"] = b + 1
+        return _dump(out)
 
 
 class DidoneSectionTonalPlanTool(Tool):
