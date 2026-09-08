@@ -121,7 +121,11 @@ def _records(df: pd.DataFrame, cols: list[str], rename: dict | None = None) -> l
 
 
 def _dump(obj) -> str:
-    return json.dumps(obj, ensure_ascii=False, indent=2, default=str)
+    # Compact (no indent): a paged get_harmony call returns ~50 chord dicts and
+    # indent=2 roughly triples the token count -- enough, with a weak local
+    # backbone, to push a sub-agent step past its output-token cap mid-code-block
+    # and trigger a parse-error retry loop. Still valid JSON to json.loads.
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 _BARE_KEY_RE = re.compile(r"^[A-Ga-g][b#]?$")
@@ -320,11 +324,12 @@ class DidoneHarmonyTool(Tool):
     description = (
         "Get the chord-by-chord Roman-numeral analysis of one aria over a "
         "measure range. Returns a JSON object {record_id, from_measure, "
-        "to_measure, n_events, chords:[{measure, beat, label, function, "
-        "tonal_region, secondary_dominant_of, inversion, quality, phrase_start, "
-        "phrase_end}]}. There is NO cadence label -- infer cadences yourself from "
-        "the progression into each phrase_end. Read the JSON directly. Max "
-        f"{_MAX_HARMONY_SPAN} measures per call; page a long aria with several calls."
+        "to_measure, n_events, chords:[{measure, beat, function, tonal_region, "
+        "phrase_start, phrase_end}]}, where `function` is the Roman numeral "
+        "(e.g. 'V65/V', 'I', 'viio'). There is NO cadence label -- infer "
+        "cadences yourself from the progression into each phrase_end. Read the "
+        f"JSON directly. Max {_MAX_HARMONY_SPAN} measures per call; page a long "
+        "aria with several calls."
     )
     inputs = {
         "record_id": {"type": "string", "description": "Aria record_id, e.g. '0012'."},
@@ -345,17 +350,18 @@ class DidoneHarmonyTool(Tool):
         df = df[(df["record_id"] == str(record_id).strip()) & (mnum >= a) & (mnum <= b)]
         if df.empty:
             return _dump({"error": f"no harmony events for record_id {record_id!r} in mm. {a}-{b}"})
+        # Only the fields a cadence/modulation reading actually needs. The
+        # dropped columns (normalized_label, applied_to, inversion,
+        # quality_or_chord_type) are null in most rows and roughly doubled the
+        # payload; `local_function` already carries the Roman numeral incl.
+        # secondary-dominant notation (e.g. 'V65/V').
         chords = []
         for _, r in df.iterrows():
             chords.append({
                 "measure": _clean(r["measure_number"]),
                 "beat": _clean(r["beat"]),
-                "label": _clean(r["normalized_label"]),
                 "function": _clean(r["local_function"]),
                 "tonal_region": _clean(r["tonal_region"]),
-                "secondary_dominant_of": _clean(r["applied_to"]) if _clean(r["is_secondary_dominant"]) else None,
-                "inversion": _clean(r["inversion"]),
-                "quality": _clean(r["quality_or_chord_type"]),
                 "phrase_start": bool(_clean(r["phrase_start"])),
                 "phrase_end": bool(_clean(r["phrase_end"])),
             })

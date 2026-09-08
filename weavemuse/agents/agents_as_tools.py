@@ -12,6 +12,40 @@ import os
 import warnings
 
 
+def _parse_error_circuit_breaker(limit: int = 2):
+    """A smolagents step_callback that aborts a run after `limit` *consecutive*
+    code-parse failures.
+
+    Observed failure mode on a weak local backbone (Qwen2.5-Coder-14B, 4-bit):
+    the agent gathers its tool data, then emits an oversized code block that is
+    truncated at the model's output-token cap, so the closing fence is missing;
+    smolagents records an AgentParsingError and re-prompts; the model
+    regenerates the same too-long block; repeat until max_steps (~20 min of
+    wasted GPU per stuck pair). This breaks that loop in ~3 steps -- the eval
+    runner catches the RuntimeError and records the pair as an error, and the
+    sweep moves on.
+    """
+    state = {"streak": 0}
+
+    def _cb(memory_step, agent=None):
+        err = getattr(memory_step, "error", None)
+        text = "" if err is None else str(err)
+        is_parse_error = err is not None and (
+            type(err).__name__ == "AgentParsingError"
+            or "code snippet is invalid" in text
+            or "regex pattern" in text
+            or "Make sure to provide correct code" in text
+        )
+        state["streak"] = state["streak"] + 1 if is_parse_error else 0
+        if state["streak"] >= limit:
+            raise RuntimeError(
+                f"musicology_analysis_agent aborted: {state['streak']} consecutive "
+                f"code-parse failures (model stuck emitting unparseable code blocks)"
+            )
+
+    return _cb
+
+
 def create_web_agent(model):
     web_agent = CodeAgent(
         tools=[WebSearchTool()],
@@ -135,11 +169,23 @@ def create_musicology_agent(model, data_dir=None):
             "cadence, or a section -- if a tool did not give you a value, say it is "
             "unavailable. Do not write a final answer before you have called at "
             "least one tool. Parse tool output with json.loads and read the fields; "
-            "do not string-split it."
+            "do not string-split it.\n"
+            "Your Python state persists across steps: a variable you set from a "
+            "tool result in one step is still available in the next. Reference it "
+            "by name -- never paste tool output back into your code as a literal "
+            "dict or list. Keep each code block short."
         ),
         additional_authorized_imports=["statistics", "collections", "json", "re", "math"],
-        max_steps=16,  # multi-work + paged get_harmony walks can need >12
+        max_steps=12,  # multi-work + paged get_harmony walks; the circuit breaker
+                       # below handles the stuck-in-a-parse-loop case much sooner
     )
+    # Abort a run after 2 consecutive code-parse failures instead of grinding to
+    # max_steps. Attached post-construction (not via the step_callbacks kwarg) so
+    # a smolagents version that doesn't expose it just silently skips this.
+    try:
+        agent.step_callbacks.append(_parse_error_circuit_breaker(limit=2))
+    except AttributeError:
+        pass
     # Replace smolagents' default managed-agent task wrapper. The stock version
     # front-loads "your final_answer WILL HAVE to contain ### 1 / ### 2 / ### 3"
     # which pushes a mid-size model to emit a fabricated structured answer on

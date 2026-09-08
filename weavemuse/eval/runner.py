@@ -45,7 +45,7 @@ class RunConfig:
     tool_mode: str = "remote"
     device_map: str = "auto"
     max_steps: int = 5
-    max_new_tokens: int = 1536
+    max_new_tokens: int = 4096  # 1536 truncated sub-agent code blocks -> parse-error loops
     model_id: str = ""
     task_ids: list[str] | None = None
     variant_ids: list[str] | None = None
